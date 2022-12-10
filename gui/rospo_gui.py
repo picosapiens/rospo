@@ -68,13 +68,13 @@ if ser.isOpen():
         
         fig, ax = plt.subplots()
 
-        x = np.arange(0, 4096, 1)
-        line, = ax.plot(x, 260*np.sin(x))
+        #x = np.arange(0, 2, 1)
+        line, = ax.plot([0, 2048],[127, 127] )
         fig.subplots_adjust(right=0.8)
         
-        line2, = ax.plot(x,np.zeros(4096))
+        line2, = ax.plot([0, 2048],[127, 127] )
 
-        
+        ax.axis([0,1024,-255,255]);
         
             
         def pause(event):
@@ -178,10 +178,12 @@ if ser.isOpen():
                 #print(numchannels)
                 #print("numchannels = ")
                 #print(numchannels)
-                incomingbytes = ser.read()  # should be 1 to indicate first channel
+                incomingbytes = ser.read()  # 1 = toffset, 0 = simultaneous
                 #print(int.from_bytes(incomingbytes,'little'))
-                if 1 != int.from_bytes(incomingbytes,'little'): # invalid frame
-                    return line,line2,triggermarker
+                if 0 != int.from_bytes(incomingbytes,'little'):
+                    toffset = True # interleaved samples at alternating sample times
+                else:
+                    toffset = False # simultaneous samples, transmitted interleaved
                 #print( range(1,numchannels,1))
                 for chan in np.arange(0,numchannels,1):
                     #print("updating...\n")
@@ -196,16 +198,25 @@ if ser.isOpen():
                         return line,line2,triggermarker
                     #response = ser.readline()
                     if running:
-                        if( 0 == chan ):
+                        if( 1 == numchannels ):
+                            plt.setp(line2, linestyle='None')
                             numbers = list(map(lambda x : x + soffset.val, incomingbytes))
-                            line.set_ydata(numbers)  # update the data.
-                        else:
-                            numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
-                            line2.set_ydata(numbers)  # update the data.
-                if 1 == numchannels:
-                    #numbers = list(map(lambda  x : x + soffset2.val, np.zeros(lendata)))
-                    #line2.set_ydata(numbers)
-                    plt.setp(line2, linestyle='None')
+                            if(len(numbers) != len(line.get_xdata())):
+                                line.set_data(np.arange(0,len(numbers),1),numbers)
+                            else:
+                                line.set_ydata(numbers)  # update the data.
+                        else: # both channels
+                            plt.setp(line2, linestyle='-')
+                            if(len(incomingbytes)/2 != len(line.get_xdata())):
+                                numbers = list(map(lambda x : x + soffset.val, incomingbytes))
+                                line.set_data(np.arange(0,len(numbers),2),numbers[0::2])
+                                numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
+                                line2.set_data(np.arange(1,len(numbers),2),numbers[1::2])
+                            else:
+                                numbers = list(map(lambda x : x + soffset.val, incomingbytes))
+                                line.set_ydata(numbers[0::2])  # update the data.
+                                numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
+                                line2.set_ydata(numbers[1::2])  # update the data.
             return line,line2,triggermarker
             
         ani = animation.FuncAnimation( fig, animate, interval=20, blit=True, save_count=5)

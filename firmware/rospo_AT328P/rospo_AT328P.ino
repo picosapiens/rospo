@@ -16,6 +16,9 @@ uint8_t triggertype;
 uint8_t triggerlevel;
 #define TRIGGERTIMEOUT 100
 
+#define CH0input 2
+bool bothchannels = true; // sample both channels when true
+
 #ifndef sbi
 #define sbi(sfr, bit) (_SFR_BYTE(sfr) |= _BV(bit))
 #endif
@@ -42,23 +45,19 @@ void loop() {
   //dtbuffered_ns = 26000;
 
   // Prescaler 16
- // ADCSRA = 0xe4; // set the adc to free running mode
+  //ADCSRA = 0xe4; // set the adc to free running mode
   //dtbuffered_ns = 13000;
 
   // Prescale 8
   ADCSRA = 0xe3;
   dtbuffered_ns = 6500;
-  
-  ADMUX = 0x60; // use adc0, and set adlar for left adjust
-  
-  DIDR0 = 0x01; // turn off the digital input for adc0
 
-  noInterrupts();
   int cnt = 0;
   bool currentstate;
   bool lookfor;
   uint8_t trigger;
   int triggerindex;
+  bool keeprunning = true;
   if(NOTRIGGER == triggertype)
   {
     trigger = 0;
@@ -76,15 +75,23 @@ void loop() {
       lookfor = true;
       break;
   }
-  bool keeprunning = true;
+  
+  ADMUX = 0x60 | CH0input; // use adc0, and set adlar for left adjust
+  
+  DIDR0 = 0x01; // turn off the digital input for adc0
+
+  noInterrupts();
   while(true)
   {
+    if(bothchannels)
+      ADMUX ^= 0x01; // Toggle last bit to switch between the two channels
     while( !(ADCSRA&(1<<ADIF)) ) // Wait for result (In free running mode so can't use ADSC to check for completion
       if(!keeprunning) break; // Wait for new sample or indication to stop running
     ADCBuffer[ADCCounter] = ADCH; // Grab sample
     sbi(ADCSRA,ADIF); // Apparently writing 1 clears it
 
-    currentstate = (ADCBuffer[ADCCounter]>=triggerlevel);   
+    if( (ADMUX&0x01) )
+      currentstate = (ADCBuffer[ADCCounter]>=triggerlevel);   
     switch(trigger)
     {
       case 4: // trigger-disabled period ( to make sure we fill at least ADCBUFFERSIZE-waitDuration before trigger )
@@ -127,8 +134,11 @@ void loop() {
   Serial.print('A');
   Serial.print('T');
   Serial.print('A');
-  Serial.write(0x01); // one channel
-  Serial.write(0x01); // first channel
+  if(bothchannels)
+    Serial.write(0x02); // two channels
+  else
+    Serial.write(0x01); // one channel
+  Serial.write(0x01); // interleaved
   Serial.write(ADCBUFFERSIZE & 255);
   Serial.write( (ADCBUFFERSIZE >> 8) & 255 );
   
@@ -158,6 +168,13 @@ void loop() {
     // Parse command
     switch(serialbuffer[0])
     {
+      case 'C':
+        switch(serialbuffer[1])
+        {
+          case 'H': // CH -- channel enable
+          bothchannels = serialbuffer[2];
+        }
+        break;
       case 'T':
         switch(serialbuffer[1])
         {
@@ -168,7 +185,9 @@ void loop() {
               triggerlevel = serialbuffer[3];
               //delay(1000);
             }
+            break;
         }
+        break;
     }
     delay(50);
   }
