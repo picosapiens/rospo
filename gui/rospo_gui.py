@@ -5,7 +5,7 @@ import serial, time, sys
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from matplotlib.widgets import Slider, Button, RadioButtons
+from matplotlib.widgets import Slider, Button, RadioButtons, CheckButtons
 import serial.tools.list_ports
 import tkinter.filedialog
 import csv
@@ -82,6 +82,13 @@ if ser.isOpen():
             global bpause
             running = not running
             bpause.label.set_text("PAUSE" if running else "RUN")
+            
+        def plusminusupdate(event):
+            if cbchanneltoggle.get_status()[0]:
+                msg = bytearray([ord('O'),ord('F'),1,ord('\n')]);
+            else:
+                msg = bytearray([ord('O'),ord('F'),0,ord('\n')]);
+            ser.write(msg)
             
         def trigupdate(event):
             trdict = {'No Trigger':0,'Rising Edge':1,'Falling Edge':2}
@@ -162,6 +169,10 @@ if ser.isOpen():
             orientation="vertical",
             color='red'
             )
+            
+        axchanneltoggle = fig.add_axes([0.82, 0.25, 0.05, 0.22])
+        cbchanneltoggle = CheckButtons(axchanneltoggle, ['+/-'])
+        cbchanneltoggle.on_clicked(plusminusupdate)
             
         def animate(i):
             triggermarker.set_ydata(strig.val+soffset.val)

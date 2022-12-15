@@ -17,6 +17,8 @@ uint8_t triggerlevel;
 #define TRIGGERTIMEOUT 100
 
 #define CH0input 2
+#define offset1Pin 2
+#define offset2Pin 3
 bool bothchannels = true; // sample both channels when true
 
 #ifndef sbi
@@ -29,6 +31,8 @@ void setup() {
   //Serial.println("Hello");
   triggertype = NOTRIGGER;
   triggerlevel = 128;
+  pinMode(offset1Pin, OUTPUT);
+  pinMode(offset2Pin, OUTPUT);
 }
 
 void loop() {
@@ -45,12 +49,12 @@ void loop() {
   //dtbuffered_ns = 26000;
 
   // Prescaler 16
-  //ADCSRA = 0xe4; // set the adc to free running mode
-  //dtbuffered_ns = 13000;
+  ADCSRA = 0xe4; // set the adc to free running mode
+  dtbuffered_ns = 13000;
 
-  // Prescale 8
-  ADCSRA = 0xe3;
-  dtbuffered_ns = 6500;
+  // Prescaler 8
+  //ADCSRA = 0xe3;
+  //dtbuffered_ns = 6500;
 
   int cnt = 0;
   bool currentstate;
@@ -186,6 +190,20 @@ void loop() {
               //delay(1000);
             }
             break;
+        }
+        break;
+      case 'O':
+        switch(serialbuffer[1])
+        {
+          case 'F': // OF -- offset for negative voltage sensing
+            if( serialbuffer[2] )
+            {
+               digitalWrite(offset1Pin, HIGH);
+               digitalWrite(offset2Pin, HIGH);
+            } else {
+               digitalWrite(offset1Pin, LOW);
+               digitalWrite(offset2Pin, LOW);
+            }
         }
         break;
     }
