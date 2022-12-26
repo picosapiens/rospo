@@ -15,6 +15,7 @@ uint8_t serialbuffer[SERIALBUFFERSIZE];
 uint8_t triggertype;
 uint8_t triggerlevel;
 #define TRIGGERTIMEOUT 100
+uint8_t adcprescaler = 16;
 
 #define CH0input 2
 #define offset1Pin 2
@@ -33,6 +34,8 @@ void setup() {
   triggerlevel = 128;
   pinMode(offset1Pin, OUTPUT);
   pinMode(offset2Pin, OUTPUT);
+  digitalWrite(offset1Pin, LOW);
+  digitalWrite(offset2Pin, LOW);
 }
 
 void loop() {
@@ -40,21 +43,24 @@ void loop() {
   int stopIndex = ADCCounter;
   memset( (void *)ADCBuffer, 0, sizeof(ADCBuffer) ); // clear buffer
   
-  //TIMSK0 = 0; // turn off timer0 for lower jitter - delay() and millis() killed
-  #warning Not disabling timer
-  analogWrite(6,128);
+  TIMSK0 = 0; // turn off timer0 for lower jitter - delay() and millis() killed
+  //analogWrite(6,128);
 
-  // Prescaler 32
-  //ADCSRA = 0xe5; // set the adc to free running mode
-  //dtbuffered_ns = 26000;
-
-  // Prescaler 16
-  ADCSRA = 0xe4; // set the adc to free running mode
-  dtbuffered_ns = 13000;
-
-  // Prescaler 8
-  //ADCSRA = 0xe3;
-  //dtbuffered_ns = 6500;
+  switch( adcprescaler )
+  {
+    case 32:
+      ADCSRA = 0xe5;
+      dtbuffered_ns = 26000;
+      break;
+    case 16:
+      ADCSRA = 0xe4;
+      dtbuffered_ns = 13000;
+      break;
+    case 8:
+      ADCSRA = 0xe3;
+      dtbuffered_ns = 6500;
+      break;
+  }  
 
   int cnt = 0;
   bool currentstate;
@@ -82,7 +88,7 @@ void loop() {
   
   ADMUX = 0x60 | CH0input; // use adc0, and set adlar for left adjust
   
-  DIDR0 = 0x01; // turn off the digital input for adc0
+  DIDR0 = 0x0C; // turn off the digital input for adc0 to reduce power consumption
 
   noInterrupts();
   while(true)
@@ -93,7 +99,7 @@ void loop() {
       if(!keeprunning) break; // Wait for new sample or indication to stop running
     ADCBuffer[ADCCounter] = ADCH; // Grab sample
     sbi(ADCSRA,ADIF); // Apparently writing 1 clears it
-
+    
     if( (ADMUX&0x01) )
       currentstate = (ADCBuffer[ADCCounter]>=triggerlevel);   
     switch(trigger)
@@ -155,7 +161,10 @@ void loop() {
   Serial.print('\n');
   delay(100);
 
-  if(Serial.available() >= SERIALMSGSIZE)
+  //if(Serial.available() >= SERIALMSGSIZE)
+  //{
+  int keepwaiting = 0;
+  while(keepwaiting < 1000)
   {
     int incomingByte = 0; // for incoming serial data
     incomingByte = Serial.read();
@@ -164,11 +173,11 @@ void loop() {
     {
       serialbuffer[i] = incomingByte;
       i += 1;
-      if (i>SERIALMSGSIZE)
+      if (i==SERIALMSGSIZE)
         break;
       incomingByte = Serial.read();
     }
-    delay(100); // Give everything a chance to catch up
+    //delay(100); // Give everything a chance to catch up
     // Parse command
     switch(serialbuffer[0])
     {
@@ -176,7 +185,16 @@ void loop() {
         switch(serialbuffer[1])
         {
           case 'H': // CH -- channel enable
-          bothchannels = serialbuffer[2];
+            bothchannels = serialbuffer[2];
+            break;
+        }
+        break;
+      case 'R':
+        switch(serialbuffer[1])
+        {
+          case 'N': // RN -- run scope
+            keepwaiting = 1000;
+            break;
         }
         break;
       case 'T':
@@ -192,10 +210,10 @@ void loop() {
             break;
         }
         break;
-      case 'O':
+      case 'S':
         switch(serialbuffer[1])
         {
-          case 'F': // OF -- offset for negative voltage sensing
+          case 'T': // ST -- settings
             if( serialbuffer[2] )
             {
                digitalWrite(offset1Pin, HIGH);
@@ -204,10 +222,24 @@ void loop() {
                digitalWrite(offset1Pin, LOW);
                digitalWrite(offset2Pin, LOW);
             }
+            if( serialbuffer[3])
+            {
+              bothchannels = true;
+            } else {
+              bothchannels = false;
+            }
+            if( serialbuffer[4])
+            {
+              adcprescaler = 16;
+            } else {
+              adcprescaler = 8;
+            }
+            break;
         }
         break;
     }
-    delay(50);
+    delay(10);
+    keepwaiting++;
   }
   
 }

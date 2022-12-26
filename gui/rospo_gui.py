@@ -50,6 +50,8 @@ ser.open()
 
 if ser.isOpen():
 
+        outmsg = bytearray([0,0,0,0,0,0,0,0,0])
+
     #try:
 
         ser.flushInput() #flush input buffer, discarding all its contents
@@ -76,6 +78,7 @@ if ser.isOpen():
 
         ax.axis([0,1024,-255,255]);
         
+        
             
         def pause(event):
             global running
@@ -83,22 +86,14 @@ if ser.isOpen():
             running = not running
             bpause.label.set_text("PAUSE" if running else "RUN")
             
-        def plusminusupdate(event):
-            if cbchanneltoggle.get_status()[0]:
-                msg = bytearray([ord('O'),ord('F'),1,ord('\n')]);
-            else:
-                msg = bytearray([ord('O'),ord('F'),0,ord('\n')]);
-            ser.write(msg)
+        def settingsupdate(event):
+            global outmsg
+            outmsg = bytearray([ord('S'),ord('T'),int(cbchanneltoggle.get_status()[0]),int(cbchanneltoggle.get_status()[1]),int(cbchanneltoggle.get_status()[2]),0,0,0,0]);
             
         def trigupdate(event):
+            global outmsg
             trdict = {'No Trigger':0,'Rising Edge':1,'Falling Edge':2}
-            msg = bytearray([ord('T'),ord('R'),int(trdict[rtrig.value_selected]),int(strig.val),0,0,0,0,ord('\n')]);
-            #ser.write("TR".encode())
-            #ser.write(bytes([TRedge]))
-            #ser.write(bytes([strig.val]))
-            #ser.write("\n".encode())
-            ser.write(msg)
-            #print(msg.hex())
+            outmsg = bytearray([ord('T'),ord('R'),int(trdict[rtrig.value_selected]),int(strig.val),0,0,0,0,0]);
             
         def savedata(event):
             fn = tkinter.filedialog.asksaveasfilename(defaultextension=".csv")
@@ -170,11 +165,17 @@ if ser.isOpen():
             color='red'
             )
             
-        axchanneltoggle = fig.add_axes([0.82, 0.25, 0.05, 0.22])
-        cbchanneltoggle = CheckButtons(axchanneltoggle, ['+/-'])
-        cbchanneltoggle.on_clicked(plusminusupdate)
+        axchanneltoggle = fig.add_axes([0.82, 0.25, 0.1, 0.22])
+        cbchanneltoggle = CheckButtons(axchanneltoggle, ['+/-','2chan','hi speed'])
+        cbchanneltoggle.on_clicked(settingsupdate)
             
         def animate(i):
+            global outmsg
+            if( 0 != outmsg[0] ):
+                ser.write(outmsg)
+                outmsg = bytearray([0,0,0,0,0,0,0,0,0])
+            runmsg = bytearray([ord('R'),ord('N'),0,0,0,0,0,0,0])
+            ser.write(runmsg)
             triggermarker.set_ydata(strig.val+soffset.val)
             triggermarker.set_xdata(ax.get_xlim()[0])
             #incomingbytes = ser.read_until("DATA"); # find start of data
@@ -228,8 +229,10 @@ if ser.isOpen():
                                 line.set_ydata(numbers[0::2])  # update the data.
                                 numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
                                 line2.set_ydata(numbers[1::2])  # update the data.
+            
             return line,line2,triggermarker
             
+        
         ani = animation.FuncAnimation( fig, animate, interval=20, blit=True, save_count=5)
         
         rax = fig.add_axes([0.81, 0.55, 0.18, 0.12])
