@@ -43,7 +43,7 @@ ser.timeout = 0.25          #block read
 ser.xonxoff = False     #disable software flow control
 ser.rtscts = False     #disable hardware (RTS/CTS) flow control
 ser.dsrdtr = False       #disable hardware (DSR/DTR) flow control
-ser.writeTimeout = 2     #timeout for write
+ser.writeTimeout = 3     #timeout for write
 ser.open()
 
 
@@ -76,7 +76,7 @@ if ser.isOpen():
         
         line2, = ax.plot([0, 2048],[127, 127] )
 
-        ax.axis([0,1024,-255,255]);
+        ax.axis([0,4096,-255,255]);
         
         
             
@@ -176,6 +176,7 @@ if ser.isOpen():
                 outmsg = bytearray([0,0,0,0,0,0,0,0,0])
             runmsg = bytearray([ord('R'),ord('N'),0,0,0,0,0,0,0])
             ser.write(runmsg)
+            ser.flushOutput()
             triggermarker.set_ydata(strig.val+soffset.val)
             triggermarker.set_xdata(ax.get_xlim()[0])
             #incomingbytes = ser.read_until("DATA"); # find start of data
@@ -197,38 +198,38 @@ if ser.isOpen():
                 else:
                     toffset = False # simultaneous samples, transmitted interleaved
                 #print( range(1,numchannels,1))
-                for chan in np.arange(0,numchannels,1):
-                    #print("updating...\n")
-                    incomingbytes = ser.read(2)
-                    #print(incomingbytes)
-                    lendata = int.from_bytes(incomingbytes,'little')
-                    if(0 == lendata or 1024*8 < lendata):
-                        return line,line2,triggermarker
-                    #print(f"lendata = {lendata}\n")
-                    incomingbytes = ser.read(lendata)
-                    if lendata != len(incomingbytes):
-                        return line,line2,triggermarker
-                    #response = ser.readline()
-                    if running:
-                        if( 1 == numchannels ):
-                            plt.setp(line2, linestyle='None')
+                #for chan in np.arange(0,numchannels,1):
+                #print("updating...\n")
+                incomingbytes = ser.read(2)
+                #print(incomingbytes)
+                lendata = int.from_bytes(incomingbytes,'little')
+                if(0 == lendata or 1024*8 < lendata):
+                    return line,line2,triggermarker
+                #print(f"lendata = {lendata}\n")
+                incomingbytes = ser.read(lendata)
+                if lendata != len(incomingbytes):
+                    print("Did not get a full frame: ",len(incomingbytes)," vs ",lendata)
+                    return line,line2,triggermarker
+                if running:
+                    if( 1 == numchannels ):
+                        plt.setp(line2, linestyle='None')
+                        numbers = list(map(lambda x : x + soffset.val, incomingbytes))
+                        if(len(numbers) != len(line.get_xdata())):
+                            line.set_data(np.arange(0,len(numbers),1),numbers)
+                        else:
+                            line.set_ydata(numbers)  # update the data.
+                    else: # both channels
+                        plt.setp(line2, linestyle='-')
+                        if(len(incomingbytes)/2 != len(line.get_xdata())):
                             numbers = list(map(lambda x : x + soffset.val, incomingbytes))
-                            if(len(numbers) != len(line.get_xdata())):
-                                line.set_data(np.arange(0,len(numbers),1),numbers)
-                            else:
-                                line.set_ydata(numbers)  # update the data.
-                        else: # both channels
-                            plt.setp(line2, linestyle='-')
-                            if(len(incomingbytes)/2 != len(line.get_xdata())):
-                                numbers = list(map(lambda x : x + soffset.val, incomingbytes))
-                                line.set_data(np.arange(0,len(numbers),2),numbers[0::2])
-                                numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
-                                line2.set_data(np.arange(1,len(numbers),2),numbers[1::2])
-                            else:
-                                numbers = list(map(lambda x : x + soffset.val, incomingbytes))
-                                line.set_ydata(numbers[0::2])  # update the data.
-                                numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
-                                line2.set_ydata(numbers[1::2])  # update the data.
+                            line.set_data(np.arange(0,len(numbers),2),numbers[0::2])
+                            numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
+                            line2.set_data(np.arange(1,len(numbers),2),numbers[1::2])
+                        else:
+                            numbers = list(map(lambda x : x + soffset.val, incomingbytes))
+                            line.set_ydata(numbers[0::2])  # update the data.
+                            numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
+                            line2.set_ydata(numbers[1::2])  # update the data.
             
             return line,line2,triggermarker
             

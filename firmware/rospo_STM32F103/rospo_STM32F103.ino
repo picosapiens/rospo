@@ -1,7 +1,9 @@
 
 // BUFFER SIZE MUST BE A POWER OF TWO
-#define analogInPin PA5
+#define analogInPin1 PA1
+#define analogInPin2 PA0
 #define ADCBUFFERSIZE 4096
+//define LED_BUILTIN PC13
 
 uint16_t ADCCounter=0;
 uint16_t ADCBuffer[ADCBUFFERSIZE];
@@ -18,44 +20,97 @@ uint8_t triggertype;
 uint8_t triggerlevel;
 #define TRIGGERTIMEOUT 100
 
+#define offset1Pin PB7
+#define offset2Pin PB8
+bool bothchannels = true; // sample both channels when true
+bool applyoffsets = false;
+
+// Defines for setting and clearing register bits
+#ifndef cbi
+#define cbi(sfr, bit) (_SFR_BYTE(sfr) &= ~_BV(bit))
+#endif
+#ifndef sbi
+#define sbi(sfr, bit) (_SFR_BYTE(sfr) |= _BV(bit))
+#endif
+
 void fetch() {  
-//  const adc_dev *dev = PIN_MAP[analogInPin].adc_device;
-  int channel = PIN_MAP[analogInPin].adc_channel;
-  adc_set_sample_rate(ADC1, ADC_SMPR_1_5); // ADC_SMPR_13_5, ADC_SMPR_1_5
-  adc_set_sample_rate(ADC2, ADC_SMPR_1_5); // ADC_SMPR_13_5, ADC_SMPR_1_5
+  
+  if( applyoffsets )
+  {
+     digitalWrite(offset1Pin, HIGH);
+     digitalWrite(offset2Pin, HIGH);
+  } else {
+     digitalWrite(offset1Pin, LOW);
+     digitalWrite(offset2Pin, LOW);
+  }
+
+  // What I'd really like to do is set sample rates to ADC_SMPR_1_5, but even using an op amp voltage follower the two ADCs aren't charging well
+  // enough to be consistent with each other, resulting in what looks like high speed noise between the two. ADC_SMPR_7_5 makes the problem less
+  // frequent but it's still there. Have to go to 13_5 to mostly get it right, at which point (1.38 Msps) it's better to just not interleave (2.51 Msps)
+  adc_set_sample_rate(ADC1, ADC_SMPR_1_5); // ADC_SMPR_1_5 would be fastest but introduces intermittent discrepancies between the two ADCs.
+  adc_set_sample_rate(ADC2, ADC_SMPR_1_5); // ADC_SMPR_7_5 has less frequent discrepancies. Have to go to 13_5 to really get it right. - Would it be better to just not interleave ADCs?
   adc_set_prescaler(ADC_PRE_PCLK2_DIV_2); // 36 MHz ADC Clock
   adc_set_reg_seqlen(ADC1, 1);
   adc_set_reg_seqlen(ADC2, 1);
-  ADC1->regs->SQR3 = channel;
-  ADC2->regs->SQR3 = channel;
+  ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
+  ADC2->regs->SQR3 = PIN_MAP[analogInPin2].adc_channel;
 
-  ADC1->regs->CR1 |= 0x70000; // ADC_CR1_FASTINT;
-  ADC1->regs->CR2 |= ADC_CR2_CONT | ADC_CR2_SWSTART;
-  ADC2->regs->CR2 |= ADC_CR2_CONT | ADC_CR2_SWSTART;
-  ADC2->regs->CR1 |= 0x70000; // ADC_CR1_FASTINT;
-  nvic_globalirq_disable();
-//  uint32_t t = micros();
-  // .584 uS
-  for (int j = 0; j < ADCBUFFERSIZE ; j+=2 )
+  //digitalWrite(LED_BUILTIN, HIGH);
+  //delay(300);
+  if(bothchannels)
   {
-    while (!(ADC1->regs->SR & ADC_SR_EOC))
-        ;
-    ADCBuffer[j] = ADC1->regs->DR & ADC_DR_DATA;
-    while (!(ADC2->regs->SR & ADC_SR_EOC))
-        ;
-    ADCBuffer[j+1] = ADC2->regs->DR & ADC_DR_DATA;
+    ADC1->regs->CR1 |= 0x70000; // ADC_CR1_FASTINT;
+    ADC1->regs->CR2 |= ADC_CR2_CONT | ADC_CR2_SWSTART;
+    ADC2->regs->CR2 |= ADC_CR2_CONT | ADC_CR2_SWSTART;
+    ADC2->regs->CR1 |= 0x70000; // ADC_CR1_FASTINT;
+    nvic_globalirq_disable();
+   
+    for (int j = 0; j < ADCBUFFERSIZE ; j+=2 )
+    {
+      while (!(ADC1->regs->SR & ADC_SR_EOC))
+          ;
+      ADCBuffer[j] = ADC1->regs->DR & ADC_DR_DATA;
+      while (!(ADC2->regs->SR & ADC_SR_EOC))
+          ;
+      ADCBuffer[j+1] = ADC2->regs->DR & ADC_DR_DATA;
+    }
+    nvic_globalirq_enable();
+  } else {
+    ADC1->regs->CR1 |= 0x70000; // ADC_CR1_FASTINT;
+    ADC1->regs->CR2 |= ADC_CR2_CONT | ADC_CR2_SWSTART;
+    nvic_globalirq_disable();
+   
+    for (int j = 0; j < ADCBUFFERSIZE ; j+=1 )
+    {
+      while (!(ADC1->regs->SR & ADC_SR_EOC))
+          ;
+      ADCBuffer[j] = ADC1->regs->DR & ADC_DR_DATA;
+    }
+    nvic_globalirq_enable();
+
   }
-  nvic_globalirq_enable();
-  //t = micros()-t;
-  //Serial.println(String(t));
+  //digitalWrite(offset1Pin, LOW); // I think one or both of these pins gets used for serial and it
+  //digitalWrite(offset2Pin, LOW); // doesn't like it if you leave them high
+
+  //digitalWrite(LED_BUILTIN, LOW);
+  //delay(300);
 }
 
 
 void setup() {
   Serial.begin(115200);
-  pinMode(PA2,OUTPUT);
-  digitalWrite(PA2,0);
-  delay(3000);
+  //pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(offset1Pin,OUTPUT);
+  pinMode(offset2Pin,OUTPUT);
+  if( applyoffsets )
+  {
+     digitalWrite(offset1Pin, HIGH);
+     digitalWrite(offset2Pin, HIGH);
+  } else {
+     digitalWrite(offset1Pin, LOW);
+     digitalWrite(offset2Pin, LOW);
+  }
+  //delay(3000);
 }
 
 uint32_t runNumber = 0;
@@ -64,15 +119,19 @@ void loop() {
   // put your main code here, to run repeatedly:
   fetch();
   
+  
   //Serial.print("DATA ");
   Serial.print('D');
   Serial.print('A');
   Serial.print('T');
   Serial.print('A');
-  Serial.write(0x01); // one channel
-  Serial.write(0x01); // first channel
-  Serial.write( (uint8_t)(ADCBUFFERSIZE & 255) );
-  Serial.write( (uint8_t)((ADCBUFFERSIZE >> 8) & 255) );
+  if(bothchannels)
+    Serial.write(0x02); // two channels
+  else
+    Serial.write(0x01); // one channel
+  Serial.write(uint8_t(0x00)); // simultaneous
+  Serial.write(uint8_t(ADCBUFFERSIZE & 255));
+  Serial.write( (ADCBUFFERSIZE >> 8) & 255 );
   
   for(int i=0;i<ADCBUFFERSIZE;i++)
   {
@@ -83,7 +142,9 @@ void loop() {
   Serial.print('\n');
   delay(100);
 
-  if(Serial.available() >= SERIALMSGSIZE)
+  int keepwaiting = 0;
+  // Is my Serial read ability locking up when the offset pins go high??
+  while(keepwaiting < 1000)
   {
     int incomingByte = 0; // for incoming serial data
     incomingByte = Serial.read();
@@ -92,14 +153,30 @@ void loop() {
     {
       serialbuffer[i] = incomingByte;
       i += 1;
-      if (i>SERIALMSGSIZE)
+      if (i==SERIALMSGSIZE)
         break;
       incomingByte = Serial.read();
     }
-    delay(200); // Give everything a chance to catch up
+    //delay(100); // Give everything a chance to catch up
     // Parse command
     switch(serialbuffer[0])
     {
+      case 'C':
+        switch(serialbuffer[1])
+        {
+          case 'H': // CH -- channel enable
+            bothchannels = serialbuffer[2];
+            break;
+        }
+        break;
+      case 'R':
+        switch(serialbuffer[1])
+        {
+          case 'N': // RN -- run scope
+            keepwaiting = 1000;
+            break;
+        }
+        break;
       case 'T':
         switch(serialbuffer[1])
         {
@@ -110,8 +187,32 @@ void loop() {
               triggerlevel = serialbuffer[3];
               //delay(1000);
             }
+            break;
         }
+        break;
+      case 'S':
+        switch(serialbuffer[1])
+        {
+          case 'T': // ST -- settings
+            applyoffsets = serialbuffer[2];
+            if( serialbuffer[3])
+            {
+              bothchannels = true;
+            } else {
+              bothchannels = false;
+            }
+            if( serialbuffer[4])
+            {
+              // low speed
+            } else {
+              // high speed
+            }
+            break;
+        }
+        break;
     }
-    delay(50);
+    delay(10);
+    keepwaiting++;
   }
+
 }
