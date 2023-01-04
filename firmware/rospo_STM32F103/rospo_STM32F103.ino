@@ -1,3 +1,4 @@
+#include "libmaple/dma.h"
 
 // BUFFER SIZE MUST BE A POWER OF TWO
 #define analogInPin1 PA1
@@ -24,6 +25,7 @@ uint8_t triggerlevel;
 #define offset2Pin PB8
 bool bothchannels = true; // sample both channels when true
 bool applyoffsets = false;
+bool highspeed = false;
 
 // Defines for setting and clearing register bits
 #ifndef cbi
@@ -32,6 +34,55 @@ bool applyoffsets = false;
 #ifndef sbi
 #define sbi(sfr, bit) (_SFR_BYTE(sfr) |= _BV(bit))
 #endif
+
+void capture() {
+  if( applyoffsets )
+  {
+     digitalWrite(offset1Pin, HIGH);
+     digitalWrite(offset2Pin, HIGH);
+  } else {
+     digitalWrite(offset1Pin, LOW);
+     digitalWrite(offset2Pin, LOW);
+  }
+
+  // Configure ADC speed
+  if(highspeed)
+  {
+    adc_set_prescaler(ADC_PRE_PCLK2_DIV_2); // 36 MHz ADC Clock
+    adc_set_sample_rate(ADC1, ADC_SMPR_1_5); // Sample for 1.5 ADC clock cycles
+    adc_set_sample_rate(ADC2, ADC_SMPR_1_5);
+  } else {
+    adc_set_prescaler(ADC_PRE_PCLK2_DIV_4); // 18 MHz ADC Clock
+    adc_set_sample_rate(ADC1, ADC_SMPR_7_5); // Sample for 7.5 ADC clock cycles
+    adc_set_sample_rate(ADC2, ADC_SMPR_7_5);
+  }
+  
+
+  // Set up Direct Memory Access (DMA) for the ADC's.
+  // Note that we can't set up separate transfers for the two ADC's. They have to be in Simultaneous mode, which combines them
+  // into a 32-bit full word rather than the standard 16-bit half word for a single ADC. The 32 bit word holds two 12-bit values,
+  // with ADC1 and ADC2 in bits 0-11 and 16-27, respectively.
+  dma_init(DMA1);
+  //dma_attach_interrupt(DMA1, DMA_CH1, func); // Don't think I want to call a function upon interrupt
+  dma_setup_transfer( DMA1, DMA_CH1, &ADC1->regs->DR, DMA_SIZE_32BITS, ADCBuffer, DMA_SIZE_32BITS, (DMA_CCR_MINC | DMA_CCR_CIRC ) ); // (DMA_CIRC_MODE|DMA_MINC_MODE) ??
+  dma_set_num_transfers(DMA1, DMA_CH1, ADCBUFFERSIZE/2);
+  dma_enable(DMA1, DMA_CH1);
+  ADC1->regs->CR1 |= 6 << 16;      //Regular simultaneous mode. Required for ADC1 only. ADC2 will follow.
+  ADC1->regs->CR2 |= ADC_CR2_DMA;     //enable ADC DMA transfer
+  ADC1->regs->CR2 |= ADC_CR2_CONT;    //Set the ADC in Continuous Mode
+  ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
+  ADC2->regs->CR2 |= ADC_CR2_DMA;     //enable ADC DMA transfer
+  ADC2->regs->CR2 |= ADC_CR2_CONT;    //Set the ADC in Continuous Mode
+  ADC2->regs->SQR3 = PIN_MAP[analogInPin2].adc_channel;
+
+  // Start conversion
+  ADC1->regs->CR2 |= ADC_CR2_SWSTART;
+  //ADC2->regs->CR2 |= ADC_CR2_SWSTART;
+
+  delay(100);
+  // TODO: This is incomplete. Need to write logic to check for trigger and stop the ADC's.
+  
+}
 
 void fetch() {  
   
@@ -49,7 +100,10 @@ void fetch() {
   // frequent but it's still there. Have to go to 13_5 to mostly get it right, at which point (1.38 Msps) it's better to just not interleave (2.51 Msps)
   adc_set_sample_rate(ADC1, ADC_SMPR_1_5); // ADC_SMPR_1_5 would be fastest but introduces intermittent discrepancies between the two ADCs.
   adc_set_sample_rate(ADC2, ADC_SMPR_1_5); // ADC_SMPR_7_5 has less frequent discrepancies. Have to go to 13_5 to really get it right. - Would it be better to just not interleave ADCs?
-  adc_set_prescaler(ADC_PRE_PCLK2_DIV_2); // 36 MHz ADC Clock
+  if(highspeed)
+    adc_set_prescaler(ADC_PRE_PCLK2_DIV_2); // 36 MHz ADC Clock
+  else
+    adc_set_prescaler(ADC_PRE_PCLK2_DIV_4);
   adc_set_reg_seqlen(ADC1, 1);
   adc_set_reg_seqlen(ADC2, 1);
   ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
@@ -110,6 +164,10 @@ void setup() {
      digitalWrite(offset1Pin, LOW);
      digitalWrite(offset2Pin, LOW);
   }
+  pinMode(analogInPin1, INPUT_ANALOG);
+  pinMode(analogInPin2, INPUT_ANALOG);
+  adc_calibrate(ADC1);
+  adc_calibrate(ADC2);
   //delay(3000);
 }
 
@@ -117,8 +175,8 @@ uint32_t runNumber = 0;
 
 void loop() {
   // put your main code here, to run repeatedly:
-  fetch();
-  
+  //fetch();
+  capture();
   
   //Serial.print("DATA ");
   Serial.print('D');
@@ -204,8 +262,10 @@ void loop() {
             if( serialbuffer[4])
             {
               // low speed
+              highspeed = true;
             } else {
               // high speed
+              highspeed = false;
             }
             break;
         }
