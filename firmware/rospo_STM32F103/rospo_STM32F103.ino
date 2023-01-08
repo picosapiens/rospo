@@ -17,9 +17,9 @@ uint8_t serialbuffer[SERIALBUFFERSIZE];
 #define NOTRIGGER 0
 #define RISINGTRIGGER 1
 #define FALLINGTRIGGER 2
-uint8_t triggertype;
-uint8_t triggerlevel;
-#define TRIGGERTIMEOUT 100
+uint8_t triggertype = NOTRIGGER;
+uint8_t triggerlevel = 128;
+#define TRIGGERTIMEOUT 200
 
 #define offset1Pin PB7
 #define offset2Pin PB8
@@ -46,6 +46,7 @@ void capture() {
   }
 
   // Configure ADC speed
+  // 
   if(highspeed)
   {
     adc_set_prescaler(ADC_PRE_PCLK2_DIV_2); // 36 MHz ADC Clock
@@ -67,88 +68,128 @@ void capture() {
   dma_setup_transfer( DMA1, DMA_CH1, &ADC1->regs->DR, DMA_SIZE_32BITS, ADCBuffer, DMA_SIZE_32BITS, (DMA_CCR_MINC | DMA_CCR_CIRC ) ); // (DMA_CIRC_MODE|DMA_MINC_MODE) ??
   dma_set_num_transfers(DMA1, DMA_CH1, ADCBUFFERSIZE/2);
   dma_enable(DMA1, DMA_CH1);
-  ADC1->regs->CR1 |= 6 << 16;      //Regular simultaneous mode. Required for ADC1 only. ADC2 will follow.
+  if(bothchannels)
+  {
+    // This is how I would like to do it, but at high speed (ADC_SMPR_1_5) the two ADC's are inconsistent
+    ADC1->regs->CR1 |= 6 << 16;      // Regular simultaneous mode. Required for ADC1 only. ADC2 will follow.
+    ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
+    ADC2->regs->SQR3 = PIN_MAP[analogInPin2].adc_channel;
+  } else {
+    ADC1->regs->CR1 |= 7 << 16; // Fast interleaved mode
+    ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
+    ADC2->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel; // Same pin for single channel mode
+  }
   ADC1->regs->CR2 |= ADC_CR2_DMA;     //enable ADC DMA transfer
   ADC1->regs->CR2 |= ADC_CR2_CONT;    //Set the ADC in Continuous Mode
-  ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
   ADC2->regs->CR2 |= ADC_CR2_DMA;     //enable ADC DMA transfer
   ADC2->regs->CR2 |= ADC_CR2_CONT;    //Set the ADC in Continuous Mode
-  ADC2->regs->SQR3 = PIN_MAP[analogInPin2].adc_channel;
+
+  int cnt = 0;
+  bool currentstate;
+  bool lookfor;
+  uint8_t trigger;
+  int triggerindex;
+  bool keeprunning = true;
+  uint32_t stopIndex;
+  if(NOTRIGGER == triggertype)
+  {
+    trigger = 1;
+    stopIndex = ADCBUFFERSIZE; // fill the whole buffer
+  } else {
+    trigger = 5;
+    stopIndex = ADCBUFFERSIZE+1; // will never reach this, but will update when triggered
+  }
+  switch(triggertype)
+  {
+    case RISINGTRIGGER:
+      lookfor = false;
+      break;
+    case FALLINGTRIGGER:
+      lookfor = true;
+      break;
+  }
+  
 
   // Start conversion
   ADC1->regs->CR2 |= ADC_CR2_SWSTART;
   //ADC2->regs->CR2 |= ADC_CR2_SWSTART;
-
-  delay(100);
-  // TODO: This is incomplete. Need to write logic to check for trigger and stop the ADC's.
+  delay(1);
+  currentstate = (ADCBuffer[0]>=triggerlevel);   
+  bool done = false;
+  uint32_t ADCcpuindex = 0;
+  uint32_t prevADCcpuindex = 0;
+  while(true)
+  {
+    uint32_t ADCdmaindex = 2*(ADCBUFFERSIZE/2 - DMA1->regs->CNDTR1);
+    uint32_t numsamples;
+    if( ADCdmaindex >= ADCcpuindex )
+      numsamples = ADCdmaindex - ADCcpuindex;
+    else
+      numsamples = ADCBUFFERSIZE + ADCdmaindex - ADCcpuindex;
+    for(uint32_t idx = 0; idx < numsamples; idx += 2)
+    {
+      ADCCounter = ADCcpuindex + idx;
+      if( ADCCounter >= ADCBUFFERSIZE )
+        ADCCounter = (ADCCounter)&(ADCBUFFERSIZE-1);
+      bool currentstate = (ADCBuffer[ADCCounter]>=triggerlevel);   
+      switch(trigger)
+      {
+        case 5: // trigger-disabled period ( to make sure we fill at least ADCBUFFERSIZE-waitDuration before trigger )
+          if( ADCCounter > 256 )
+            trigger--;
+          break;
+        case 4: // waiting
+          if(currentstate == lookfor)
+          {
+            lookfor = !lookfor;
+            trigger--;
+          }
+          break;
+        case 3: // armed
+          if(currentstate == lookfor)
+          {
+            trigger--;
+          }
+          triggerindex = ADCCounter;
+          break;
+        case 2: // triggered
+          stopIndex = ( triggerindex + ADCBUFFERSIZE - 256 ) & (ADCBUFFERSIZE-1);
+          trigger--;
+          break;
+        case 1:
+          //if( ADCcpuindex < ADCdmaindex )
+          //{
+            if( ADCCounter == stopIndex )//(stopIndex>=prevADCcpuindex) && (stopIndex<=ADCcpuindex) )
+            {
+              dma_disable(DMA1,DMA_CH1); // We will have overshot by the time we get here
+              done = true;
+              trigger--;
+            }
+          //} else {
+          //  if( (stopIndex>prevADCcpuindex && stopIndex<ADCBUFFERSIZE) || (stopIndex<ADCcpuindex ) )
+          //    dma_disable(DMA1,DMA_CH1);
+          //    done = true;
+          //}
+          //trigger--;
+          break;
+      }
+    }
+    if( prevADCcpuindex > ADCcpuindex)
+      cnt += 1;
+    prevADCcpuindex = ADCcpuindex;
+    ADCcpuindex = ADCdmaindex;
+    if(done)
+      break;
+    if( TRIGGERTIMEOUT < cnt )
+      break;
+  }
   
+  // Stop conversion
+  //dma_disable(DMA1,DMA_CH1); // Handled above to get it done immediately.
+  ADC1->regs->CR2 &= ~ADC_CR2_CONT;
+  //ADCCounter = 2*(ADCBUFFERSIZE/2 - DMA1->regs->CNDTR1);
 }
 
-void fetch() {  
-  
-  if( applyoffsets )
-  {
-     digitalWrite(offset1Pin, HIGH);
-     digitalWrite(offset2Pin, HIGH);
-  } else {
-     digitalWrite(offset1Pin, LOW);
-     digitalWrite(offset2Pin, LOW);
-  }
-
-  // What I'd really like to do is set sample rates to ADC_SMPR_1_5, but even using an op amp voltage follower the two ADCs aren't charging well
-  // enough to be consistent with each other, resulting in what looks like high speed noise between the two. ADC_SMPR_7_5 makes the problem less
-  // frequent but it's still there. Have to go to 13_5 to mostly get it right, at which point (1.38 Msps) it's better to just not interleave (2.51 Msps)
-  adc_set_sample_rate(ADC1, ADC_SMPR_1_5); // ADC_SMPR_1_5 would be fastest but introduces intermittent discrepancies between the two ADCs.
-  adc_set_sample_rate(ADC2, ADC_SMPR_1_5); // ADC_SMPR_7_5 has less frequent discrepancies. Have to go to 13_5 to really get it right. - Would it be better to just not interleave ADCs?
-  if(highspeed)
-    adc_set_prescaler(ADC_PRE_PCLK2_DIV_2); // 36 MHz ADC Clock
-  else
-    adc_set_prescaler(ADC_PRE_PCLK2_DIV_4);
-  adc_set_reg_seqlen(ADC1, 1);
-  adc_set_reg_seqlen(ADC2, 1);
-  ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
-  ADC2->regs->SQR3 = PIN_MAP[analogInPin2].adc_channel;
-
-  //digitalWrite(LED_BUILTIN, HIGH);
-  //delay(300);
-  if(bothchannels)
-  {
-    ADC1->regs->CR1 |= 0x70000; // ADC_CR1_FASTINT;
-    ADC1->regs->CR2 |= ADC_CR2_CONT | ADC_CR2_SWSTART;
-    ADC2->regs->CR2 |= ADC_CR2_CONT | ADC_CR2_SWSTART;
-    ADC2->regs->CR1 |= 0x70000; // ADC_CR1_FASTINT;
-    nvic_globalirq_disable();
-   
-    for (int j = 0; j < ADCBUFFERSIZE ; j+=2 )
-    {
-      while (!(ADC1->regs->SR & ADC_SR_EOC))
-          ;
-      ADCBuffer[j] = ADC1->regs->DR & ADC_DR_DATA;
-      while (!(ADC2->regs->SR & ADC_SR_EOC))
-          ;
-      ADCBuffer[j+1] = ADC2->regs->DR & ADC_DR_DATA;
-    }
-    nvic_globalirq_enable();
-  } else {
-    ADC1->regs->CR1 |= 0x70000; // ADC_CR1_FASTINT;
-    ADC1->regs->CR2 |= ADC_CR2_CONT | ADC_CR2_SWSTART;
-    nvic_globalirq_disable();
-   
-    for (int j = 0; j < ADCBUFFERSIZE ; j+=1 )
-    {
-      while (!(ADC1->regs->SR & ADC_SR_EOC))
-          ;
-      ADCBuffer[j] = ADC1->regs->DR & ADC_DR_DATA;
-    }
-    nvic_globalirq_enable();
-
-  }
-  //digitalWrite(offset1Pin, LOW); // I think one or both of these pins gets used for serial and it
-  //digitalWrite(offset2Pin, LOW); // doesn't like it if you leave them high
-
-  //digitalWrite(LED_BUILTIN, LOW);
-  //delay(300);
-}
 
 
 void setup() {

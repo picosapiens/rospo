@@ -101,7 +101,7 @@ if ser.isOpen():
             if f is None: # Cancel
                 return
             wr = csv.writer(f)
-            wr.writerow(['time','ch1','ch2'])
+            wr.writerow(['time','ch0','ch1'])
             for w in range(len(line.get_xdata())):
                 wr.writerow([line.get_xdata()[w],line.get_ydata()[w],line2.get_ydata()[w]])
             f.close()
@@ -130,7 +130,7 @@ if ser.isOpen():
         axtrig = fig.add_axes([0.82, 0.71, 0.05, 0.22])
         strig = Slider(
             ax=axtrig,
-            label="CH1\nTrigger",
+            label="CH0\nTrigger",
             valmin=1,
             valmax=254,
             valinit=128,
@@ -143,7 +143,7 @@ if ser.isOpen():
         axoffset = fig.add_axes([0.92, 0.71, 0.05, 0.22])
         soffset = Slider(
             ax=axoffset,
-            label="CH1\nOffset",
+            label="CH0\nOffset",
             valmin=-255,
             valmax=255,
             valinit=0,
@@ -156,7 +156,7 @@ if ser.isOpen():
         axoffset2 = fig.add_axes([0.92, 0.25, 0.05, 0.22])
         soffset2 = Slider(
             ax=axoffset2,
-            label="CH2\nOffset",
+            label="CH1\nOffset",
             valmin=-255,
             valmax=255,
             valinit=-255,
