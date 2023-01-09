@@ -76,7 +76,7 @@ if ser.isOpen():
         
         line2, = ax.plot([0, 2048],[127, 127] )
 
-        ax.axis([0,4096,-255,255]);
+        ax.axis([-1024,4096,-255,255]);
         
         
             
@@ -206,6 +206,8 @@ if ser.isOpen():
                 if(0 == lendata or 1024*8 < lendata):
                     return line,line2,triggermarker
                 #print(f"lendata = {lendata}\n")
+                incomingbytes = ser.read(2)
+                triggerindex = int.from_bytes(incomingbytes,'little')
                 incomingbytes = ser.read(lendata)
                 if lendata != len(incomingbytes):
                     print("Did not get a full frame: ",len(incomingbytes)," vs ",lendata)
@@ -214,22 +216,14 @@ if ser.isOpen():
                     if( 1 == numchannels ):
                         plt.setp(line2, linestyle='None')
                         numbers = list(map(lambda x : x + soffset.val, incomingbytes))
-                        if(len(numbers) != len(line.get_xdata())):
-                            line.set_data(np.arange(0,len(numbers),1),numbers)
-                        else:
-                            line.set_ydata(numbers)  # update the data.
+                        line.set_data(np.arange(-triggerindex,len(numbers)-triggerindex,1),numbers)
                     else: # both channels
                         plt.setp(line2, linestyle='-')
-                        if(len(incomingbytes)/2 != len(line.get_xdata())):
-                            numbers = list(map(lambda x : x + soffset.val, incomingbytes))
-                            line.set_data(np.arange(0,len(numbers),2),numbers[0::2])
-                            numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
-                            line2.set_data(np.arange(1,len(numbers),2),numbers[1::2])
-                        else:
-                            numbers = list(map(lambda x : x + soffset.val, incomingbytes))
-                            line.set_ydata(numbers[0::2])  # update the data.
-                            numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
-                            line2.set_ydata(numbers[1::2])  # update the data.
+                        xvals = np.arange(0-triggerindex,lendata-triggerindex,1)
+                        numbers = list(map(lambda x : x + soffset.val, incomingbytes))
+                        line.set_data(xvals[0::2],numbers[0::2])
+                        numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
+                        line2.set_data(xvals[1::2],numbers[1::2])
             
             return line,line2,triggermarker
             

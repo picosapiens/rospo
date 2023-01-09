@@ -21,6 +21,7 @@ uint8_t adcprescaler = 16;
 #define offset1Pin 2
 #define offset2Pin 3
 bool bothchannels = true; // sample both channels when true
+uint16_t triggerindex;
 
 #ifndef sbi
 #define sbi(sfr, bit) (_SFR_BYTE(sfr) |= _BV(bit))
@@ -66,7 +67,6 @@ void loop() {
   bool currentstate;
   bool lookfor;
   uint8_t trigger;
-  int triggerindex;
   bool keeprunning = true;
   if(NOTRIGGER == triggertype)
   {
@@ -151,6 +151,8 @@ void loop() {
   Serial.write(0x01); // interleaved
   Serial.write(ADCBUFFERSIZE & 255);
   Serial.write( (ADCBUFFERSIZE >> 8) & 255 );
+  Serial.write(triggerindex & 255);
+  Serial.write( (triggerindex >> 8) & 255 );
   
   for(int i=0;i<ADCBUFFERSIZE;i++)
   {

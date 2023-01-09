@@ -26,6 +26,7 @@ uint8_t triggerlevel = 128;
 bool bothchannels = true; // sample both channels when true
 bool applyoffsets = false;
 bool highspeed = false;
+uint16_t triggerindex;
 
 // Defines for setting and clearing register bits
 #ifndef cbi
@@ -85,16 +86,16 @@ void capture() {
   ADC2->regs->CR2 |= ADC_CR2_CONT;    //Set the ADC in Continuous Mode
 
   int cnt = 0;
-  bool currentstate;
+  //bool currentstate;
   bool lookfor;
   uint8_t trigger;
-  int triggerindex;
   bool keeprunning = true;
   uint32_t stopIndex;
   if(NOTRIGGER == triggertype)
   {
     trigger = 1;
     stopIndex = ADCBUFFERSIZE; // fill the whole buffer
+    triggerindex = 0;
   } else {
     trigger = 5;
     stopIndex = ADCBUFFERSIZE+1; // will never reach this, but will update when triggered
@@ -109,28 +110,32 @@ void capture() {
       break;
   }
   
-
+  bool done = false;
+  uint16_t ADCcpuindex = 0;
+  uint16_t prevADCcpuindex = 0;
+  uint16_t ADCdmaindex;
+  uint16_t numsamples;
   // Start conversion
   ADC1->regs->CR2 |= ADC_CR2_SWSTART;
   //ADC2->regs->CR2 |= ADC_CR2_SWSTART;
-  delay(1);
-  currentstate = (ADCBuffer[0]>=triggerlevel);   
-  bool done = false;
-  uint32_t ADCcpuindex = 0;
-  uint32_t prevADCcpuindex = 0;
+  //delay(1);
+  //currentstate = (ADCBuffer[0]>=triggerlevel);   
+  
   while(true)
   {
-    uint32_t ADCdmaindex = 2*(ADCBUFFERSIZE/2 - DMA1->regs->CNDTR1);
-    uint32_t numsamples;
+    //if(bothchannels)
+      ADCdmaindex = 2*(ADCBUFFERSIZE/2 - DMA1->regs->CNDTR1);
+    //else
+    //  ADCdmaindex = ADCBUFFERSIZE - DMA1->regs->CNDTR1;
     if( ADCdmaindex >= ADCcpuindex )
       numsamples = ADCdmaindex - ADCcpuindex;
     else
       numsamples = ADCBUFFERSIZE + ADCdmaindex - ADCcpuindex;
-    for(uint32_t idx = 0; idx < numsamples; idx += 2)
+    for(uint32_t idx = 0; idx < numsamples; idx += 2)             // *** THIS SOFTWARE TRIGGER MAY NOT BE WORKABLE AT HIGH SPEED - maybe capture first and retroactively look for trigger?
     {
-      ADCCounter = ADCcpuindex + idx;
-      if( ADCCounter >= ADCBUFFERSIZE )
-        ADCCounter = (ADCCounter)&(ADCBUFFERSIZE-1);
+      ADCCounter = (ADCcpuindex + idx)&(ADCBUFFERSIZE-1);
+      //if( ADCCounter >= ADCBUFFERSIZE )
+      //  ADCCounter = (ADCCounter)&(ADCBUFFERSIZE-1);
       bool currentstate = (ADCBuffer[ADCCounter]>=triggerlevel);   
       switch(trigger)
       {
@@ -149,8 +154,8 @@ void capture() {
           if(currentstate == lookfor)
           {
             trigger--;
+            triggerindex = ADCCounter;
           }
-          triggerindex = ADCCounter;
           break;
         case 2: // triggered
           stopIndex = ( triggerindex + ADCBUFFERSIZE - 256 ) & (ADCBUFFERSIZE-1);
@@ -162,12 +167,16 @@ void capture() {
             if( ADCCounter == stopIndex )//(stopIndex>=prevADCcpuindex) && (stopIndex<=ADCcpuindex) )
             {
               dma_disable(DMA1,DMA_CH1); // We will have overshot by the time we get here
+              ADC1->regs->CR2 &= ~ADC_CR2_CONT;
+              ADC2->regs->CR2 &= ~ADC_CR2_CONT;
               done = true;
               trigger--;
             }
           //} else {
           //  if( (stopIndex>prevADCcpuindex && stopIndex<ADCBUFFERSIZE) || (stopIndex<ADCcpuindex ) )
           //    dma_disable(DMA1,DMA_CH1);
+          //    ADC1->regs->CR2 &= ~ADC_CR2_CONT;
+          //    ADC2->regs->CR2 &= ~ADC_CR2_CONT;
           //    done = true;
           //}
           //trigger--;
@@ -186,8 +195,17 @@ void capture() {
   
   // Stop conversion
   //dma_disable(DMA1,DMA_CH1); // Handled above to get it done immediately.
-  ADC1->regs->CR2 &= ~ADC_CR2_CONT;
-  //ADCCounter = 2*(ADCBUFFERSIZE/2 - DMA1->regs->CNDTR1);
+  //ADC1->regs->CR2 &= ~ADC_CR2_CONT;
+  //ADCCounter = (ADCCounter+2)&(ADCBUFFERSIZE-1);
+  //ADCCounter = ( 2*(ADCBUFFERSIZE/2 + 1 - DMA1->regs->CNDTR1) ) & ( ADCBUFFERSIZE - 1);
+  //if(bothchannels)
+      ADCdmaindex = ( 2*(ADCBUFFERSIZE/2 - DMA1->regs->CNDTR1) ) & ( ADCBUFFERSIZE - 1);
+   // else
+    //  ADCdmaindex = ( ADCBUFFERSIZE - DMA1->regs->CNDTR1 ) & ( ADCBUFFERSIZE - 1);
+  if(NOTRIGGER == triggertype)
+  {
+    triggerindex = ADCCounter;
+  }
 }
 
 
@@ -229,10 +247,15 @@ void loop() {
   else
     Serial.write(0x01); // one channel
   Serial.write(uint8_t(0x00)); // simultaneous
-  Serial.write(uint8_t(ADCBUFFERSIZE & 255));
-  Serial.write( (ADCBUFFERSIZE >> 8) & 255 );
+  Serial.write(uint8_t( (ADCBUFFERSIZE-2) & 255)); // The last data point is inconsistent, so I'm discarding it
+  Serial.write( ((ADCBUFFERSIZE-2) >> 8) & 255 );
+  int adjustedtriggerindex = triggerindex - ADCCounter;
+  if(0>adjustedtriggerindex)
+    adjustedtriggerindex += ADCBUFFERSIZE;
+  Serial.write( adjustedtriggerindex & 255);
+  Serial.write( (adjustedtriggerindex >> 8) & 255 );
   
-  for(int i=0;i<ADCBUFFERSIZE;i++)
+  for(int i=0;i<ADCBUFFERSIZE-2;i++)
   {
     Serial.write((uint8_t)((ADCBuffer[(ADCCounter + i) & (ADCBUFFERSIZE-1)]) >> 4));
     //Serial.print(',');
