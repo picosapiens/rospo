@@ -18,8 +18,8 @@ uint8_t serialbuffer[SERIALBUFFERSIZE];
 #define RISINGTRIGGER 1
 #define FALLINGTRIGGER 2
 uint8_t triggertype = NOTRIGGER;
-uint8_t triggerlevel = 128;
-#define TRIGGERTIMEOUT 200
+uint16_t triggerlevel = 128;
+#define TRIGGERTIMEOUT 1000
 
 #define offset1Pin PB7
 #define offset2Pin PB8
@@ -36,6 +36,7 @@ uint16_t triggerindex;
 #define sbi(sfr, bit) (_SFR_BYTE(sfr) |= _BV(bit))
 #endif
 
+/*
 void capture() {
   if( applyoffsets )
   {
@@ -71,7 +72,6 @@ void capture() {
   dma_enable(DMA1, DMA_CH1);
   if(bothchannels)
   {
-    // This is how I would like to do it, but at high speed (ADC_SMPR_1_5) the two ADC's are inconsistent
     ADC1->regs->CR1 |= 6 << 16;      // Regular simultaneous mode. Required for ADC1 only. ADC2 will follow.
     ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
     ADC2->regs->SQR3 = PIN_MAP[analogInPin2].adc_channel;
@@ -197,11 +197,310 @@ void capture() {
   //dma_disable(DMA1,DMA_CH1); // Handled above to get it done immediately.
   //ADC1->regs->CR2 &= ~ADC_CR2_CONT;
   //ADCCounter = (ADCCounter+2)&(ADCBUFFERSIZE-1);
-  //ADCCounter = ( 2*(ADCBUFFERSIZE/2 + 1 - DMA1->regs->CNDTR1) ) & ( ADCBUFFERSIZE - 1);
+  ADCCounter = ( 2*(ADCBUFFERSIZE/2 + 1 - DMA1->regs->CNDTR1) ) & ( ADCBUFFERSIZE - 1);
   //if(bothchannels)
-      ADCdmaindex = ( 2*(ADCBUFFERSIZE/2 - DMA1->regs->CNDTR1) ) & ( ADCBUFFERSIZE - 1);
+    //  ADCdmaindex = ( 2*(ADCBUFFERSIZE/2 - DMA1->regs->CNDTR1) ) & ( ADCBUFFERSIZE - 1);
    // else
     //  ADCdmaindex = ( ADCBUFFERSIZE - DMA1->regs->CNDTR1 ) & ( ADCBUFFERSIZE - 1);
+  if(NOTRIGGER == triggertype)
+  {
+    triggerindex = ADCCounter;
+  }
+}
+
+
+
+/*
+void fastfetch()
+{
+  if( applyoffsets )
+  {
+     digitalWrite(offset1Pin, HIGH);
+     digitalWrite(offset2Pin, HIGH);
+  } else {
+     digitalWrite(offset1Pin, LOW);
+     digitalWrite(offset2Pin, LOW);
+  }
+
+  // Configure ADC speed
+  uint32_t adcinterval;
+  uint32_t fullbuffertime;
+  if(highspeed)
+  {
+    adc_set_prescaler(ADC_PRE_PCLK2_DIV_2); // 36 MHz ADC Clock
+    adc_set_sample_rate(ADC1, ADC_SMPR_1_5); // Sample for 1.5 ADC clock cycles (14 total clocks)
+    adc_set_sample_rate(ADC2, ADC_SMPR_1_5);
+    adcinterval = 1024*14*2/72; // microseconds per 1024 samples
+    fullbuffertime = ADCBUFFERSIZE*14*2/72; // usec
+  } else {
+    adc_set_prescaler(ADC_PRE_PCLK2_DIV_4); // 18 MHz ADC Clock
+    adc_set_sample_rate(ADC1, ADC_SMPR_7_5); // Sample for 7.5 ADC clock cycles (20 total clocks)
+    adc_set_sample_rate(ADC2, ADC_SMPR_7_5);
+    adcinterval = 1024*20*4/72; // microseconds per 1024 samples
+    fullbuffertime = ADCBUFFERSIZE*20*4/72; // usec
+  }
+
+  // Set up Direct Memory Access (DMA) for the ADC's.
+  // Note that we can't set up separate transfers for the two ADC's. They have to be in Simultaneous mode, which combines them
+  // into a 32-bit full word rather than the standard 16-bit half word for a single ADC. The 32 bit word holds two 12-bit values,
+  // with ADC1 and ADC2 in bits 0-11 and 16-27, respectively.
+  dma_init(DMA1);
+  //dma_attach_interrupt(DMA1, DMA_CH1, func); // Don't think I want to call a function upon interrupt
+  dma_setup_transfer( DMA1, DMA_CH1, &ADC1->regs->DR, DMA_SIZE_32BITS, ADCBuffer, DMA_SIZE_32BITS, (DMA_CCR_MINC | DMA_CCR_CIRC ) ); // (DMA_CIRC_MODE|DMA_MINC_MODE) ??
+  dma_set_num_transfers(DMA1, DMA_CH1, ADCBUFFERSIZE/2);
+  dma_enable(DMA1, DMA_CH1);
+  if(bothchannels)
+  {
+    ADC1->regs->CR1 |= 6 << 16;      // Regular simultaneous mode. Required for ADC1 only. ADC2 will follow.
+    ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
+    ADC2->regs->SQR3 = PIN_MAP[analogInPin2].adc_channel;
+  } else {
+    ADC1->regs->CR1 |= 7 << 16; // Fast interleaved mode
+    ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
+    ADC2->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel; // Same pin for single channel mode
+  }
+  ADC1->regs->CR2 |= ADC_CR2_DMA;     //enable ADC DMA transfer
+  ADC1->regs->CR2 |= ADC_CR2_CONT;    //Set the ADC in Continuous Mode
+  ADC2->regs->CR2 |= ADC_CR2_DMA;     //enable ADC DMA transfer
+  ADC2->regs->CR2 |= ADC_CR2_CONT;    //Set the ADC in Continuous Mode
+
+  bool lookfor;
+  uint8_t trigger;
+  bool done = false;
+  uint32_t stopIndex;
+  if(NOTRIGGER == triggertype)
+  {
+    trigger = 1;
+    stopIndex = ADCBUFFERSIZE; // fill the whole buffer
+    triggerindex = 0;
+  } else {
+    trigger = 5;
+    stopIndex = ADCBUFFERSIZE+1; // will never reach this, but will update when triggered
+  }
+  switch(triggertype)
+  {
+    case RISINGTRIGGER:
+      lookfor = false;
+      break;
+    case FALLINGTRIGGER:
+      lookfor = true;
+      break;
+  }
+
+  ADCCounter = 0;
+
+  uint32_t starttime;
+  uint32_t currenttime;
+  uint32_t ADCCounter_usec;
+  uint32_t buffercycles;
+
+  // Start conversion
+  ADC1->regs->CR2 |= ADC_CR2_SWSTART;
+  starttime = micros();
+
+  // Can we dead reckon how many samples are in the buffer?
+  ADCCounter = 0;
+  buffercycles = 0;
+  uint32_t num;
+  while(true)
+  {
+    ADCCounter_usec = buffercycles*fullbuffertime + ADCCounter*fullbuffertime/ADCBUFFERSIZE;
+    num = (micros()-starttime-ADCCounter_usec)*ADCBUFFERSIZE/fullbuffertime; // samples to be processed
+    for(uint32_t i=0; i<num; i=i+2)
+    {
+      bool currentstate = (ADCBuffer[(ADCCounter+i)&(ADCBUFFERSIZE-1)]>=triggerlevel);   
+      switch(trigger)
+      {
+        case 5: // trigger-disabled period ( to make sure we fill at least ADCBUFFERSIZE-waitDuration before trigger )
+          if( ADCCounter+i > 256 )
+            trigger--;
+          break;
+        case 4: // waiting
+          if(currentstate == lookfor)
+          {
+            lookfor = !lookfor;
+            trigger--;
+          }
+          break;
+        case 3: // armed
+          if(currentstate == lookfor)
+          {
+            trigger--;
+            triggerindex = (ADCCounter+i)&(ADCBUFFERSIZE-1);
+          }
+          break;
+        case 2: // triggered
+          stopIndex = ( triggerindex + ADCBUFFERSIZE - 256 ) & (ADCBUFFERSIZE-1);
+          trigger--;
+          break;
+        case 1:
+            if( (ADCCounter+i)&(ADCBUFFERSIZE-1) == stopIndex )
+            {
+              dma_disable(DMA1,DMA_CH1); // We will have overshot by the time we get here
+              ADC1->regs->CR2 &= ~ADC_CR2_CONT;
+              ADC2->regs->CR2 &= ~ADC_CR2_CONT;
+              done = true;
+              trigger--;
+            }
+          break;
+      }
+    }
+    ADCCounter += num&(ADCBUFFERSIZE-2); // even number
+    if(ADCCounter > ADCBUFFERSIZE)
+    {
+      ADCCounter = ADCCounter&(ADCBUFFERSIZE-1);
+      buffercycles++;
+    }
+    if(done)
+      break;
+    if(buffercycles > TRIGGERTIMEOUT)
+      break;
+  }
+  ADCCounter = ( 2*(ADCBUFFERSIZE/2 + 1 - DMA1->regs->CNDTR1) ) & ( ADCBUFFERSIZE - 1);
+  if(NOTRIGGER == triggertype)
+  {
+    triggerindex = ADCCounter;
+  }
+}
+*/
+
+
+void capture2()
+{
+  if( applyoffsets )
+  {
+     digitalWrite(offset1Pin, HIGH);
+     digitalWrite(offset2Pin, HIGH);
+  } else {
+     digitalWrite(offset1Pin, LOW);
+     digitalWrite(offset2Pin, LOW);
+  }
+  ADCCounter = 0;
+
+  // Configure ADC speed
+  //uint32_t adcinterval;
+  //uint32_t fullbuffertime;
+  if(highspeed)
+  {
+    adc_set_prescaler(ADC_PRE_PCLK2_DIV_2);  // 36 MHz ADC Clock
+    adc_set_sample_rate(ADC1, ADC_SMPR_1_5); // Sample for 1.5 ADC clock cycles (14 total clocks for sample + conversion)
+    adc_set_sample_rate(ADC2, ADC_SMPR_1_5);
+    //adcinterval = 1024*14*2/72; // microseconds per 1024 samples
+    //fullbuffertime = ADCBUFFERSIZE*14*2/72; // usec
+  } else {
+    adc_set_prescaler(ADC_PRE_PCLK2_DIV_4);  //18 MHz ADC Clock
+    adc_set_sample_rate(ADC1, ADC_SMPR_7_5); // Sample for 7.5 ADC clock cycles (20 total clocks for sample + conversion)
+    adc_set_sample_rate(ADC2, ADC_SMPR_7_5);
+    //adcinterval = 1024*20*4/72; // microseconds per 1024 samples
+    //fullbuffertime = ADCBUFFERSIZE*20*4/72; // usec
+  }
+
+  // Set up ADC's in Simultaneous mode, which combines them into a 32-bit full word rather than the 
+  // standard 16-bit half word for a single ADC. The 32 bit word holds two 12-bit values, with ADC1
+  // and ADC2 in bits 0-11 and 16-27, respectively.
+  if(bothchannels)
+  {
+    ADC1->regs->CR1 |= 6 << 16; // Regular simultaneous mode. Required for ADC1 only. ADC2 will follow.
+    ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
+    ADC2->regs->SQR3 = PIN_MAP[analogInPin2].adc_channel;
+  } else {
+    ADC1->regs->CR1 |= 7 << 16; // Fast interleaved mode
+    ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
+    ADC2->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel; // Same pin for single channel mode
+  }
+  ADC1->regs->CR2 |= ADC_CR2_CONT;    //Set the ADC in Continuous Mode
+  ADC1->regs->CR2 |= ADC_CR2_DMA;     //Needs to be in DMA mode for dual mode to work
+  ADC2->regs->CR2 |= ADC_CR2_CONT;    //Set the ADC in Continuous Mode
+  ADC2->regs->CR2 |= ADC_CR2_DMA;     //Needs to be in DMA mode for dual mode to work
+
+  bool lookfor;
+  uint8_t trigger;
+  bool done = false;
+  uint32_t stopIndex;
+  if(NOTRIGGER == triggertype)
+  {
+    trigger = 1;
+    stopIndex = ADCCounter; // fill the whole buffer
+    triggerindex = 0;
+  } else {
+    trigger = 5;
+    stopIndex = ADCBUFFERSIZE/2+1; // will never reach this, but will update when triggered
+  }
+  switch(triggertype)
+  {
+    case RISINGTRIGGER:
+      lookfor = false;
+      break;
+    case FALLINGTRIGGER:
+      lookfor = true;
+      break;
+  }
+
+  uint32_t *ADCBuffer32 = (uint32_t*)ADCBuffer; // We will be writing 32-bit words with both ADC's combined
+  uint32_t buffercycles = 0;
+  bool currentstate;
+
+  // Start conversion
+  ADCCounter = 0;
+  nvic_globalirq_disable();
+  ADC1->regs->CR2 |= ADC_CR2_SWSTART;
+  
+  while(true)
+  {
+    while (!(ADC1->regs->SR & ADC_SR_EOC)) // Wait for next sample
+          ;
+    
+    ADCBuffer32[ADCCounter] = (ADC1->regs->DR); // & ADC_DR_DATA; // Store sample (32 bits, contains both ADC1 and ADC2); Reading ADC_DR clears the ADC_SR EOC bit
+    currentstate = (ADCBuffer[ADCCounter<<1]>=triggerlevel);   // We trigger based on adc1 only
+    ADCCounter = (ADCCounter+1) & (ADCBUFFERSIZE/2-1);
+    
+    switch(trigger)
+    {
+      case 5: // trigger-disabled period ( to make sure we fill at least ADCBUFFERSIZE-waitDuration before trigger )
+        if( ADCCounter > 256 )
+          trigger--;
+        break;
+      case 4: // waiting
+        if(currentstate == lookfor)
+        {
+          lookfor = !lookfor;
+          trigger--;
+        }
+        break;
+      case 3: // armed
+        if(currentstate == lookfor)
+        {
+          trigger--;
+          triggerindex = ADCCounter;
+        }
+        break;
+      case 2: // triggered
+        stopIndex = ( triggerindex + ADCBUFFERSIZE/2 - 256 ) & (ADCBUFFERSIZE/2-1);
+        trigger--;
+        break;
+      case 1:
+          if( ADCCounter == stopIndex )
+          {
+            // Take the ADC's out of continuous conversion mode
+            ADC1->regs->CR2 &= ~ADC_CR2_CONT;
+            ADC2->regs->CR2 &= ~ADC_CR2_CONT;
+            done = true;
+            trigger--;
+          }
+        break;
+    }
+    
+    if(0==ADCCounter)
+      buffercycles++;
+    if(done)
+      break;
+    if(buffercycles > TRIGGERTIMEOUT)
+      break;
+  }
+  nvic_globalirq_enable();
+
+  ADCCounter = 2*ADCCounter; // This function was looking at 32 bit elements whereas the loop function uses 16 bit
+  triggerindex = 2*triggerindex;
   if(NOTRIGGER == triggertype)
   {
     triggerindex = ADCCounter;
@@ -225,17 +524,28 @@ void setup() {
   }
   pinMode(analogInPin1, INPUT_ANALOG);
   pinMode(analogInPin2, INPUT_ANALOG);
+  memset( (void *)ADCBuffer, 0, sizeof(ADCBuffer) );
   adc_calibrate(ADC1);
   adc_calibrate(ADC2);
   //delay(3000);
 }
 
-uint32_t runNumber = 0;
+void fakedata() {
+  for(int i=0; i<ADCBUFFERSIZE; i++)
+    ADCBuffer[i] = i&(ADCBUFFERSIZE-1);
+  triggerindex = 0;
+  ADCCounter = 0;
+  #warning fake data for test purposes
+  return;
+}
 
 void loop() {
   // put your main code here, to run repeatedly:
   //fetch();
-  capture();
+  //capture();
+  //fastfetch();
+  capture2();
+  //fakedata();
   
   //Serial.print("DATA ");
   Serial.print('D');
@@ -243,30 +553,36 @@ void loop() {
   Serial.print('T');
   Serial.print('A');
   if(bothchannels)
+  {
     Serial.write(0x02); // two channels
-  else
+  } else {
     Serial.write(0x01); // one channel
+  }
   Serial.write(uint8_t(0x00)); // simultaneous
-  Serial.write(uint8_t( (ADCBUFFERSIZE-2) & 255)); // The last data point is inconsistent, so I'm discarding it
-  Serial.write( ((ADCBUFFERSIZE-2) >> 8) & 255 );
+  Serial.write(uint8_t( (ADCBUFFERSIZE) & 255));
+  Serial.write(uint8_t((ADCBUFFERSIZE) >> 8) & 255 );
   int adjustedtriggerindex = triggerindex - ADCCounter;
   if(0>adjustedtriggerindex)
     adjustedtriggerindex += ADCBUFFERSIZE;
   Serial.write( adjustedtriggerindex & 255);
   Serial.write( (adjustedtriggerindex >> 8) & 255 );
   
-  for(int i=0;i<ADCBUFFERSIZE-2;i++)
+  for(int i=0;i<ADCBUFFERSIZE;i++)
   {
     Serial.write((uint8_t)((ADCBuffer[(ADCCounter + i) & (ADCBUFFERSIZE-1)]) >> 4));
+    delayMicroseconds(10); // I lose bytes if I try to send too quickly
     //Serial.print(',');
   }
   //Serial.println("END");
+  Serial.print('E');
+  Serial.print('N');
+  Serial.print('D');
   Serial.print('\n');
   delay(100);
 
   int keepwaiting = 0;
-  // Is my Serial read ability locking up when the offset pins go high??
-  while(keepwaiting < 1000)
+  
+  while(keepwaiting < 10000)
   {
     int incomingByte = 0; // for incoming serial data
     incomingByte = Serial.read();
@@ -295,7 +611,7 @@ void loop() {
         switch(serialbuffer[1])
         {
           case 'N': // RN -- run scope
-            keepwaiting = 1000;
+            keepwaiting = 100000;
             break;
         }
         break;
@@ -304,11 +620,11 @@ void loop() {
         {
           case 'R': // TR -- trigger settings
             //if( '\n' == serialbuffer[8] )
-            {
+            //{
               triggertype = serialbuffer[2];
-              triggerlevel = serialbuffer[3];
+              triggerlevel = (serialbuffer[3]) << 4; // Bit shifting because GUI only uses 8-bit values
               //delay(1000);
-            }
+            //}
             break;
         }
         break;

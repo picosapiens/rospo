@@ -37,7 +37,7 @@ ser.baudrate = 115200
 ser.bytesize = serial.EIGHTBITS #number of bits per bytes
 ser.parity = serial.PARITY_NONE #set parity check: no parity
 ser.stopbits = serial.STOPBITS_ONE #number of stop bits
-ser.timeout = 0.25          #block read
+ser.timeout = 0.75          #block read
 #ser.timeout = 0             #non-block read
 #ser.timeout = 2              #timeout block read
 ser.xonxoff = False     #disable software flow control
@@ -106,8 +106,36 @@ if ser.isOpen():
                 wr.writerow([line.get_xdata()[w],line.get_ydata()[w],line2.get_ydata()[w]])
             f.close()
 
-
-        
+        def idfreq(line,sampleperiod):
+            y = line.get_ydata()
+            datamax = 0
+            datamin = 255
+            for i in range(len(y)):
+                if( y[i] > datamax ):
+                    datamax = y[i]
+                if( y[i] < datamin ):
+                    datamin = y[i]
+            midline = (datamax+datamin)/2;
+            #print("midline = ")
+            #print(midline)
+            #print("\n")
+            def sum3(y,i):
+                return y[i-1]+y[i]+y[i+1]
+            
+            foundpcrossings = 0;
+            lastpcrossing = 0;
+            firstpcrossing = 0;
+            for j in np.arange(1,len(y)-2):
+                if( sum3(y,j) <= 3*midline and sum3(y,j+1) > 3*midline ):
+                    if(0==foundpcrossings):
+                        firstpcrossing = j
+                    lastpcrossing = j
+                    foundpcrossings += 1;
+            signalperiod = 1.0*(lastpcrossing - firstpcrossing)/foundpcrossings # period in samples
+            #print("signalperiod = ")
+            #print(signalperiod)
+            #print("\n")
+            return 1.0/(sampleperiod*signalperiod) # frequency in Hz
 
         # To save the animation, use e.g.
         #
@@ -118,6 +146,8 @@ if ser.isOpen():
         # writer = animation.FFMpegWriter(
         #     fps=15, metadata=dict(artist='Me'), bitrate=1800)
         # ani.save("movie.mp4", writer=writer)
+        
+        freqtext = ax.text(0.45,0.9,"")
         
         axpause = fig.add_axes([0.82, 0.12, 0.15, 0.075])
         bpause = Button(axpause, 'PAUSE')
@@ -171,12 +201,13 @@ if ser.isOpen():
             
         def animate(i):
             global outmsg
+            global freqtext
             if( 0 != outmsg[0] ):
                 ser.write(outmsg)
                 outmsg = bytearray([0,0,0,0,0,0,0,0,0])
             runmsg = bytearray([ord('R'),ord('N'),0,0,0,0,0,0,0])
             ser.write(runmsg)
-            ser.flushOutput()
+            ser.reset_output_buffer() #flushOutput()
             triggermarker.set_ydata(strig.val+soffset.val)
             triggermarker.set_xdata(ax.get_xlim()[0])
             #incomingbytes = ser.read_until("DATA"); # find start of data
@@ -212,11 +243,17 @@ if ser.isOpen():
                 if lendata != len(incomingbytes):
                     print("Did not get a full frame: ",len(incomingbytes)," vs ",lendata)
                     return line,line2,triggermarker
+                if(b"END" != ser.read(3) ):
+                    print("Did not get an END marker where expected (Bytes may have been lost)")
+                    #ser.reset_input_buffer()
+                    #ser.close()
+                    #ser.open()
+                    return line,line2,triggermarker
                 if running:
                     if( 1 == numchannels ):
                         plt.setp(line2, linestyle='None')
                         numbers = list(map(lambda x : x + soffset.val, incomingbytes))
-                        line.set_data(np.arange(-triggerindex,len(numbers)-triggerindex,1),numbers)
+                        line.set_data(np.arange(-triggerindex,lendata-triggerindex,1),numbers)
                     else: # both channels
                         plt.setp(line2, linestyle='-')
                         xvals = np.arange(0-triggerindex,lendata-triggerindex,1)
@@ -224,7 +261,7 @@ if ser.isOpen():
                         line.set_data(xvals[0::2],numbers[0::2])
                         numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
                         line2.set_data(xvals[1::2],numbers[1::2])
-            
+                    #freqtext.set_text("CH0 freq: "+str(idfreq(line,1/2.5e6))+" Hz")
             return line,line2,triggermarker
             
         

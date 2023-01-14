@@ -159,7 +159,9 @@ void loop() {
     Serial.write(ADCBuffer[(ADCCounter + i) & (ADCBUFFERSIZE-1)]);
     //Serial.print(',');
   }
-  //Serial.println("END");
+  Serial.print('E');
+  Serial.print('N');
+  Serial.print('D');
   Serial.print('\n');
   delay(100);
 
