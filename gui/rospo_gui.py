@@ -106,7 +106,7 @@ if ser.isOpen():
                 wr.writerow([line.get_xdata()[w],line.get_ydata()[w],line2.get_ydata()[w]])
             f.close()
 
-        def idfreq(line,sampleperiod):
+        def idfreq(line,sampleperiod_ns):
             y = line.get_ydata()
             datamax = 0
             datamin = 255
@@ -131,11 +131,18 @@ if ser.isOpen():
                         firstpcrossing = j
                     lastpcrossing = j
                     foundpcrossings += 1;
-            signalperiod = 1.0*(lastpcrossing - firstpcrossing)/foundpcrossings # period in samples
+            if( foundpcrossings > 1 ):
+                signalperiod = 1.0*(lastpcrossing - firstpcrossing)/(foundpcrossings-1) # period in samples
+            else:
+                signalperiod = 0
             #print("signalperiod = ")
             #print(signalperiod)
             #print("\n")
-            return 1.0/(sampleperiod*signalperiod) # frequency in Hz
+            if(0 == signalperiod):
+                out = 0
+            else:
+                out = 1e9/(sampleperiod_ns*signalperiod) # frequency in Hz
+            return out
 
         # To save the animation, use e.g.
         #
@@ -147,7 +154,7 @@ if ser.isOpen():
         #     fps=15, metadata=dict(artist='Me'), bitrate=1800)
         # ani.save("movie.mp4", writer=writer)
         
-        freqtext = ax.text(0.45,0.9,"")
+        freqtext = ax.text(0.1,0.05,"CH0 freq: "+str(idfreq(line,1/2.5e6))+" Hz",color="Blue",transform=ax.transAxes)
         
         axpause = fig.add_axes([0.82, 0.12, 0.15, 0.075])
         bpause = Button(axpause, 'PAUSE')
@@ -201,7 +208,7 @@ if ser.isOpen():
             
         def animate(i):
             global outmsg
-            global freqtext
+            #global freqtext
             if( 0 != outmsg[0] ):
                 ser.write(outmsg)
                 outmsg = bytearray([0,0,0,0,0,0,0,0,0])
@@ -235,20 +242,22 @@ if ser.isOpen():
                 #print(incomingbytes)
                 lendata = int.from_bytes(incomingbytes,'little')
                 if(0 == lendata or 1024*8 < lendata):
-                    return line,line2,triggermarker
+                    return line,line2,triggermarker,freqtext # Have to return all the things that are being updated
                 #print(f"lendata = {lendata}\n")
+                incomingbytes = ser.read(2)
+                nspersample = int.from_bytes(incomingbytes,'little')  # sample rate in nanoseconds
                 incomingbytes = ser.read(2)
                 triggerindex = int.from_bytes(incomingbytes,'little')
                 incomingbytes = ser.read(lendata)
                 if lendata != len(incomingbytes):
                     print("Did not get a full frame: ",len(incomingbytes)," vs ",lendata)
-                    return line,line2,triggermarker
+                    return line,line2,triggermarker,freqtext 
                 if(b"END" != ser.read(3) ):
                     print("Did not get an END marker where expected (Bytes may have been lost)")
                     #ser.reset_input_buffer()
                     #ser.close()
                     #ser.open()
-                    return line,line2,triggermarker
+                    return line,line2,triggermarker,freqtext
                 if running:
                     if( 1 == numchannels ):
                         plt.setp(line2, linestyle='None')
@@ -261,8 +270,9 @@ if ser.isOpen():
                         line.set_data(xvals[0::2],numbers[0::2])
                         numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
                         line2.set_data(xvals[1::2],numbers[1::2])
-                    #freqtext.set_text("CH0 freq: "+str(idfreq(line,1/2.5e6))+" Hz")
-            return line,line2,triggermarker
+                    #ax.text(0.1,0.9,"CH0 freq: "+str(idfreq(line,1/2.5e6))+" Hz",transform=ax.transAxes)
+                    freqtext.set_text("CH0 freq: "+str(idfreq(line,nspersample))+" Hz")
+            return line,line2,triggermarker,freqtext
             
         
         ani = animation.FuncAnimation( fig, animate, interval=20, blit=True, save_count=5)
