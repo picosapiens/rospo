@@ -12,6 +12,9 @@ import csv
 
 if( len(sys.argv) < 2 ):
     serportlist = [comport.device for comport in serial.tools.list_ports.comports()]
+    if len(serportlist)==0:
+        print("Error: no serial port found!\n")
+        sys.exit()
     serport = serportlist[0]
     print("Serial port not specified. Defaulting to "+serport+".\n")
     if len(serportlist) > 1:
@@ -154,7 +157,8 @@ if ser.isOpen():
         #     fps=15, metadata=dict(artist='Me'), bitrate=1800)
         # ani.save("movie.mp4", writer=writer)
         
-        freqtext = ax.text(0.1,0.05,"CH0 freq: "+str(idfreq(line,1/2.5e6))+" Hz",color="Blue",transform=ax.transAxes)
+        freq = idfreq(line,1/2.5e6)
+        freqtext = ax.text(0.1,0.05,"CH0 freq: ",color="Blue",transform=ax.transAxes)
         
         axpause = fig.add_axes([0.82, 0.12, 0.15, 0.075])
         bpause = Button(axpause, 'PAUSE')
@@ -219,9 +223,13 @@ if ser.isOpen():
             triggermarker.set_xdata(ax.get_xlim()[0])
             #incomingbytes = ser.read_until("DATA"); # find start of data
             incomingbytes = ser.read()
+            cnt = 0;
             while b'D' != incomingbytes:
                 #print(incomingbytes)
                 incomingbytes = ser.read()
+                cnt += 1
+                if( 10000 < cnt ):
+                    return line,line2,triggermarker,freqtext
             if( b"ATA" == ser.read(3) ):
                 #print(incomingbytes)
                 #if incomingbytes == "DATA":
@@ -271,7 +279,8 @@ if ser.isOpen():
                         numbers = list(map(lambda x : x + soffset2.val, incomingbytes))
                         line2.set_data(xvals[1::2],numbers[1::2])
                     #ax.text(0.1,0.9,"CH0 freq: "+str(idfreq(line,1/2.5e6))+" Hz",transform=ax.transAxes)
-                    freqtext.set_text("CH0 freq: "+str(idfreq(line,nspersample))+" Hz")
+                    myfreq = idfreq(line,nspersample)
+                    freqtext.set_text("CH0 freq: "+str(int(myfreq))+" Hz")
             return line,line2,triggermarker,freqtext
             
         

@@ -38,8 +38,14 @@ uint16_t triggerindex;
 #endif
 
 
-void capture2()
+// This function runs each ADC at approximately 900 kS/s (so 1.80 MS/s if interleaved on the same channel).
+// This is about as fast as we seem to be able to run with the main CPU actively handling the data. The
+// advantage of this is that we can save the behavior of the signal before trigger to give some context.
+
+void capture_slow()
 {
+
+  // Set voltages offsets if enabled to compensate for negative signals
   if( applyoffsets )
   {
      digitalWrite(offset1Pin, HIGH);
@@ -51,20 +57,11 @@ void capture2()
   ADCCounter = 0;
 
   // Configure ADC speed
-  //uint32_t adcinterval;
-  //uint32_t fullbuffertime;
-  if(highspeed)
-  {
-    adc_set_prescaler(ADC_PRE_PCLK2_DIV_2);  // 36 MHz ADC Clock
-    adc_set_sample_rate(ADC1, ADC_SMPR_1_5); // Sample for 1.5 ADC clock cycles (14 total clocks for sample + conversion)
-    adc_set_sample_rate(ADC2, ADC_SMPR_1_5);
-    nspersample = 14*1000/(72/2)+0.5; // Adding 0.5 to hopefully get it to round to nearest integer
-  } else {
-    adc_set_prescaler(ADC_PRE_PCLK2_DIV_4);  //18 MHz ADC Clock
-    adc_set_sample_rate(ADC1, ADC_SMPR_7_5); // Sample for 7.5 ADC clock cycles (20 total clocks for sample + conversion)
-    adc_set_sample_rate(ADC2, ADC_SMPR_7_5);
-    nspersample = 20*1000/(72/4)+0.5;
-  }
+  adc_set_prescaler(ADC_PRE_PCLK2_DIV_4);  //18 MHz ADC Clock
+  adc_set_sample_rate(ADC1, ADC_SMPR_7_5); // Sample for 7.5 ADC clock cycles (20 total clocks for sample + conversion)
+  adc_set_sample_rate(ADC2, ADC_SMPR_7_5);
+  nspersample = 20*1000/(72/4)+0.5;
+  
   if(!bothchannels) // interleaved - meaning sample speed per channel is both ADC's combined
     nspersample /= 2;
 
@@ -88,7 +85,6 @@ void capture2()
 
   bool lookfor;
   uint8_t trigger;
-  bool done = false;
   uint32_t stopIndex;
   if(NOTRIGGER == triggertype)
   {
@@ -124,7 +120,7 @@ void capture2()
           ;
     
     ADCBuffer32[ADCCounter] = (ADC1->regs->DR); // & ADC_DR_DATA; // Store sample (32 bits, contains both ADC1 and ADC2); Reading ADC_DR clears the ADC_SR EOC bit
-    currentstate = (ADCBuffer[ADCCounter<<1]>=triggerlevel);   // We trigger based on adc1 only
+    currentstate = (ADCBuffer[ADCCounter<<1]>=triggerlevel);   // We trigger based on adc1 only (Because at high speeds the two ADC's tend to be a little inconsistent with each other)
     ADCCounter = (ADCCounter+1) & (ADCBUFFERSIZE/2-1);
     
     switch(trigger)
@@ -157,7 +153,7 @@ void capture2()
             // Take the ADC's out of continuous conversion mode
             ADC1->regs->CR2 &= ~ADC_CR2_CONT;
             ADC2->regs->CR2 &= ~ADC_CR2_CONT;
-            done = true;
+            buffercycles = TRIGGERTIMEOUT;
             trigger--;
           }
         break;
@@ -165,9 +161,7 @@ void capture2()
     
     if(0==ADCCounter)
       buffercycles++;
-    if(done)
-      break;
-    if(buffercycles > TRIGGERTIMEOUT)
+    if(buffercycles >= TRIGGERTIMEOUT)
       break;
   }
   nvic_globalirq_enable();
@@ -180,6 +174,141 @@ void capture2()
   }
 }
 
+
+
+// This function runs each ADC at approximately 2.57 MS/s (so 5.14 MS/s if interleaved on the same channel).
+// This exceeds their operating specifications but seems to mostly work, with the caveat that the two ADC's
+// seem to be a little inconsistent with one another, so in interleaved (single-channel) mode there's a
+// low-amplitude, high-frequency zig-zag may be superimposed on the signal. This function utilizes Direct
+// Memory Access (DMA), bypassing the main CPU for high speed capture, but we still need the main CPU to 
+// determine when a trigger has occurred. A consequence of this is that triggering is based on data captured
+// at a much slower sample rate and so will jitter more. In a perfect world, we would have hardware trigger
+// detection that would flip a digital signal when trigger occurred, triggering an interrupt in the CPU much
+// faster than we can perform analog-to-digital conversion. But that would require more hardware. Also, 
+// because high speed data collection does not commence until after trigger, we don't get to see the actual 
+// trigger event (and the lead-up to it) in the high speed data as we do in capture_slow().
+
+void capture_fast()
+{
+  // Set voltages offsets if enabled to compensate for negative signals
+  if( applyoffsets )
+  {
+     digitalWrite(offset1Pin, HIGH);
+     digitalWrite(offset2Pin, HIGH);
+  } else {
+     digitalWrite(offset1Pin, LOW);
+     digitalWrite(offset2Pin, LOW);
+  }
+  ADCCounter = 0;
+
+  // Configure ADC
+  adc_set_prescaler(ADC_PRE_PCLK2_DIV_2);  // 36 MHz ADC Clock
+  adc_set_sample_rate(ADC1, ADC_SMPR_1_5); // Sample for 1.5 ADC clock cycles (14 total clocks for sample + conversion)
+  adc_set_sample_rate(ADC2, ADC_SMPR_1_5);
+  nspersample = 14*1000/(72/2)+0.5; // Adding 0.5 to hopefully get it to round to nearest integer
+  if(!bothchannels) // interleaved - meaning sample speed per channel is both ADC's combined
+    nspersample /= 2;
+
+  // Set up ADC's in Simultaneous mode, which combines them into a 32-bit full word rather than the 
+  // standard 16-bit half word for a single ADC. The 32 bit word holds two 12-bit values, with ADC1
+  // and ADC2 in bits 0-11 and 16-27, respectively.
+  if(bothchannels)
+  {
+    ADC1->regs->CR1 |= 6 << 16; // Regular simultaneous mode. Required for ADC1 only. ADC2 will follow.
+    ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
+    ADC2->regs->SQR3 = PIN_MAP[analogInPin2].adc_channel;
+  } else {
+    ADC1->regs->CR1 |= 7 << 16; // Fast interleaved mode
+    ADC1->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel;
+    ADC2->regs->SQR3 = PIN_MAP[analogInPin1].adc_channel; // Same pin for single channel mode
+  }
+  ADC1->regs->CR2 |= ADC_CR2_DMA;     // Needs to be in DMA mode for dual mode to work
+  ADC2->regs->CR2 |= ADC_CR2_DMA;     // Needs to be in DMA mode for dual mode to work
+  ADC1->regs->CR2 &= ~ADC_CR2_CONT;   // Initially we don't want to be in continuous mode
+  ADC2->regs->CR2 &= ~ADC_CR2_CONT;
+
+  nvic_globalirq_disable();
+
+  bool lookfor;
+  uint8_t trigger;
+  uint32_t stopIndex;
+  if(NOTRIGGER == triggertype)
+  {
+    trigger = 1;
+  } else {
+    trigger = 4; // No trigger disabled period
+  }
+  switch(triggertype)
+  {
+    case RISINGTRIGGER:
+      lookfor = false;
+      break;
+    case FALLINGTRIGGER:
+      lookfor = true;
+      break;
+  }
+
+  uint32_t *ADCBuffer32 = (uint32_t*)ADCBuffer; // We will be writing 32-bit words with both ADC's combined
+  uint32_t buffercycles = 0;
+  bool currentstate;
+  ADCCounter = (ADCCounter+1) & (ADCBUFFERSIZE/2-1);
+
+  // Watch for trigger as fast as the CPU can go
+  while( true )
+  {
+
+    ADC1->regs->CR2 |= ADC_CR2_SWSTART; // Start a conversion
+    
+    while (!(ADC1->regs->SR & ADC_SR_EOC)) // Wait for next sample
+          ;
+    
+    currentstate = ((ADC1->regs->DR& ADC_DR_DATA)>=triggerlevel);   // We trigger based on adc1 only (Because at high speeds the two ADC's tend to be a little inconsistent with each other)
+    
+    switch(trigger)
+    {
+      case 4: // waiting
+        if(currentstate == lookfor)
+        {
+          lookfor = !lookfor;
+          trigger--;
+        }
+        break;
+      case 3: // armed
+        if(currentstate == lookfor)
+        {
+          trigger--;
+          buffercycles = TRIGGERTIMEOUT; // Doing this to exit the loop immediately
+        }
+        break;
+    }
+    
+    if(0==ADCCounter)
+      buffercycles++;
+    if(buffercycles >= TRIGGERTIMEOUT)
+      break;
+  }
+
+  // Now put the ADC's in continuous mode and set up Direct Memory Access (DMA)
+  // Note that we can't set up separate transfers for the two ADC's. They have to be in Simultaneous mode, which combines them
+  // into a 32-bit full word rather than the standard 16-bit half word for a single ADC. The 32 bit word holds two 12-bit values,
+  // with ADC1 and ADC2 in bits 0-11 and 16-27, respectively.
+  ADC1->regs->CR2 |= ADC_CR2_CONT;    //Set the ADC in Continuous Mode
+  ADC2->regs->CR2 |= ADC_CR2_CONT;    //Set the ADC in Continuous Mode
+  dma_init(DMA1);
+  dma_setup_transfer( DMA1, DMA_CH1, &ADC1->regs->DR, DMA_SIZE_32BITS, ADCBuffer, DMA_SIZE_32BITS, DMA_CCR_MINC ); // DMA_MINC_MODE ??
+  dma_set_num_transfers(DMA1, DMA_CH1, ADCBUFFERSIZE/2);
+  dma_enable(DMA1, DMA_CH1);
+
+  ADC1->regs->CR2 |= ADC_CR2_SWSTART; // Start conversion
+
+  // Wait for it to finish.
+  while( DMA1->regs->CNDTR1 ) // Register contains remaining samples to be written
+    ;
+
+  nvic_globalirq_enable();
+  ADCCounter = 0;
+  triggerindex = 0;
+}
 
 
 void setup() {
@@ -203,23 +332,14 @@ void setup() {
   //delay(3000);
 }
 
-void fakedata() {
-  for(int i=0; i<ADCBUFFERSIZE; i++)
-    ADCBuffer[i] = i&(ADCBUFFERSIZE-1);
-  triggerindex = 0;
-  ADCCounter = 0;
-  #warning fake data for test purposes
-  return;
-}
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  //fetch();
-  //capture();
-  //fastfetch();
-  capture2();
-  //fakedata();
-  
+
+  if (highspeed)
+    capture_fast();
+  else
+    capture_slow();
+
   //Serial.print("DATA ");
   Serial.print('D');
   Serial.print('A');
