@@ -354,11 +354,11 @@ void loop() {
   Serial.write(uint8_t(0x00)); // simultaneous
   Serial.write(uint8_t( (ADCBUFFERSIZE) & 255));
   Serial.write(uint8_t((ADCBUFFERSIZE) >> 8) & 255 );
+  Serial.write( nspersample & 255 );
+  Serial.write( (nspersample >> 8) & 255 );
   int adjustedtriggerindex = triggerindex - ADCCounter;
   if(0>adjustedtriggerindex)
     adjustedtriggerindex += ADCBUFFERSIZE;
-  Serial.write( nspersample & 255 );
-  Serial.write( (nspersample >> 8) & 255 );
   Serial.write( adjustedtriggerindex & 255 );
   Serial.write( (adjustedtriggerindex >> 8) & 255 );
   
@@ -376,78 +376,79 @@ void loop() {
   delay(100);
 
   int keepwaiting = 0;
-  
-  while(keepwaiting < 10000)
-  {
-    int incomingByte = 0; // for incoming serial data
-    incomingByte = Serial.read();
-    int i = 0;
-    while(0 <= incomingByte)
+
+  if( serialbuffer[SERIALMSGSIZE-1] == 'X' ) // Check for end character to make sure message didn't get garbled
+    while(keepwaiting < 10000)
     {
-      serialbuffer[i] = incomingByte;
-      i += 1;
-      if (i==SERIALMSGSIZE)
-        break;
+      int incomingByte = 0; // for incoming serial data
       incomingByte = Serial.read();
+      int i = 0;
+      while(0 <= incomingByte)
+      {
+        serialbuffer[i] = incomingByte;
+        i += 1;
+        if (i==SERIALMSGSIZE)
+          break;
+        incomingByte = Serial.read();
+      }
+      //delay(100); // Give everything a chance to catch up
+      // Parse command
+      switch(serialbuffer[0])
+      {
+        case 'C':
+          switch(serialbuffer[1])
+          {
+            case 'H': // CH -- channel enable
+              bothchannels = serialbuffer[2];
+              break;
+          }
+          break;
+        case 'R':
+          switch(serialbuffer[1])
+          {
+            case 'N': // RN -- run scope
+              keepwaiting = 100000;
+              break;
+          }
+          break;
+        case 'T':
+          switch(serialbuffer[1])
+          {
+            case 'R': // TR -- trigger settings
+              //if( '\n' == serialbuffer[8] )
+              //{
+                triggertype = serialbuffer[2];
+                triggerlevel = (serialbuffer[3]) << 4; // Bit shifting because GUI only uses 8-bit values
+                //delay(1000);
+              //}
+              break;
+          }
+          break;
+        case 'S':
+          switch(serialbuffer[1])
+          {
+            case 'T': // ST -- settings
+              applyoffsets = serialbuffer[2];
+              if( serialbuffer[3])
+              {
+                bothchannels = true;
+              } else {
+                bothchannels = false;
+              }
+              if( serialbuffer[4])
+              {
+                // low speed
+                highspeed = true;
+              } else {
+                // high speed
+                highspeed = false;
+              }
+              break;
+          }
+          break;
+      }
+      delay(10);
+      keepwaiting++;
     }
-    //delay(100); // Give everything a chance to catch up
-    // Parse command
-    switch(serialbuffer[0])
-    {
-      case 'C':
-        switch(serialbuffer[1])
-        {
-          case 'H': // CH -- channel enable
-            bothchannels = serialbuffer[2];
-            break;
-        }
-        break;
-      case 'R':
-        switch(serialbuffer[1])
-        {
-          case 'N': // RN -- run scope
-            keepwaiting = 100000;
-            break;
-        }
-        break;
-      case 'T':
-        switch(serialbuffer[1])
-        {
-          case 'R': // TR -- trigger settings
-            //if( '\n' == serialbuffer[8] )
-            //{
-              triggertype = serialbuffer[2];
-              triggerlevel = (serialbuffer[3]) << 4; // Bit shifting because GUI only uses 8-bit values
-              //delay(1000);
-            //}
-            break;
-        }
-        break;
-      case 'S':
-        switch(serialbuffer[1])
-        {
-          case 'T': // ST -- settings
-            applyoffsets = serialbuffer[2];
-            if( serialbuffer[3])
-            {
-              bothchannels = true;
-            } else {
-              bothchannels = false;
-            }
-            if( serialbuffer[4])
-            {
-              // low speed
-              highspeed = true;
-            } else {
-              // high speed
-              highspeed = false;
-            }
-            break;
-        }
-        break;
-    }
-    delay(10);
-    keepwaiting++;
-  }
 
 }

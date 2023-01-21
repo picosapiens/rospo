@@ -9,6 +9,7 @@ from matplotlib.widgets import Slider, Button, RadioButtons, CheckButtons
 import serial.tools.list_ports
 import tkinter.filedialog
 import csv
+import time
 
 if( len(sys.argv) < 2 ):
     serportlist = [comport.device for comport in serial.tools.list_ports.comports()]
@@ -37,16 +38,14 @@ running = True
 ser = serial.Serial()
 ser.port = serport
 ser.baudrate = 115200
-ser.bytesize = serial.EIGHTBITS #number of bits per bytes
-ser.parity = serial.PARITY_NONE #set parity check: no parity
-ser.stopbits = serial.STOPBITS_ONE #number of stop bits
-ser.timeout = 0.75          #block read
-#ser.timeout = 0             #non-block read
-#ser.timeout = 2              #timeout block read
-ser.xonxoff = False     #disable software flow control
+#ser.bytesize = serial.EIGHTBITS #number of bits per bytes
+#ser.parity = serial.PARITY_NONE #set parity check: no parity
+#ser.stopbits = serial.STOPBITS_ONE #number of stop bits
+ser.timeout = 1.0          #block read
+#ser.xonxoff = False     #disable software flow control
 ser.rtscts = False     #disable hardware (RTS/CTS) flow control
 ser.dsrdtr = False       #disable hardware (DSR/DTR) flow control
-ser.writeTimeout = 3     #timeout for write
+ser.writeTimeout = 2     #timeout for write
 ser.open()
 
 
@@ -56,9 +55,9 @@ if ser.isOpen():
         outmsg = bytearray([0,0,0,0,0,0,0,0,0])
 
     #try:
-
-        ser.flushInput() #flush input buffer, discarding all its contents
-        ser.flushOutput()#flush output buffer, aborting current output 
+        ser.reset_output_buffer() #flushOutput()
+        #ser.flushInput() #flush input buffer, discarding all its contents
+        #ser.flushOutput()#flush output buffer, aborting current output 
                      #and discard all that is in buffer
 
         #write data
@@ -91,12 +90,12 @@ if ser.isOpen():
             
         def settingsupdate(event):
             global outmsg
-            outmsg = bytearray([ord('S'),ord('T'),int(cbchanneltoggle.get_status()[0]),int(cbchanneltoggle.get_status()[1]),int(cbchanneltoggle.get_status()[2]),0,0,0,0]);
+            outmsg = bytearray([ord('S'),ord('T'),int(cbchanneltoggle.get_status()[0]),int(cbchanneltoggle.get_status()[1]),int(cbchanneltoggle.get_status()[2]),0,0,0,ord('X')]);
             
         def trigupdate(event):
             global outmsg
             trdict = {'No Trigger':0,'Rising Edge':1,'Falling Edge':2}
-            outmsg = bytearray([ord('T'),ord('R'),int(trdict[rtrig.value_selected]),int(strig.val),0,0,0,0,0]);
+            outmsg = bytearray([ord('T'),ord('R'),int(trdict[rtrig.value_selected]),int(strig.val),0,0,0,0,ord('X')]);
             
         def savedata(event):
             fn = tkinter.filedialog.asksaveasfilename(defaultextension=".csv")
@@ -157,7 +156,6 @@ if ser.isOpen():
         #     fps=15, metadata=dict(artist='Me'), bitrate=1800)
         # ani.save("movie.mp4", writer=writer)
         
-        freq = idfreq(line,1/2.5e6)
         freqtext = ax.text(0.1,0.05,"CH0 freq: ",color="Blue",transform=ax.transAxes)
         
         axpause = fig.add_axes([0.82, 0.12, 0.15, 0.075])
@@ -215,10 +213,12 @@ if ser.isOpen():
             #global freqtext
             if( 0 != outmsg[0] ):
                 ser.write(outmsg)
+                print(outmsg)
                 outmsg = bytearray([0,0,0,0,0,0,0,0,0])
-            runmsg = bytearray([ord('R'),ord('N'),0,0,0,0,0,0,0])
+            time.sleep(0.002)
+            runmsg = bytearray([ord('R'),ord('N'),0,0,0,0,0,0,ord('X')])
             ser.write(runmsg)
-            ser.reset_output_buffer() #flushOutput()
+            #ser.reset_output_buffer() #flushOutput()
             triggermarker.set_ydata(strig.val+soffset.val)
             triggermarker.set_xdata(ax.get_xlim()[0])
             #incomingbytes = ser.read_until("DATA"); # find start of data
@@ -228,7 +228,7 @@ if ser.isOpen():
                 #print(incomingbytes)
                 incomingbytes = ser.read()
                 cnt += 1
-                if( 10000 < cnt ):
+                if( 1000 < cnt ):
                     return line,line2,triggermarker,freqtext
             if( b"ATA" == ser.read(3) ):
                 #print(incomingbytes)
@@ -259,13 +259,17 @@ if ser.isOpen():
                 incomingbytes = ser.read(lendata)
                 if lendata != len(incomingbytes):
                     print("Did not get a full frame: ",len(incomingbytes)," vs ",lendata)
+                    print(incomingbytes)
+                    print(ser.read(3))
                     return line,line2,triggermarker,freqtext 
+                #else:
+                #    print("Full frame received")
                 if(b"END" != ser.read(3) ):
                     print("Did not get an END marker where expected (Bytes may have been lost)")
-                    #ser.reset_input_buffer()
                     #ser.close()
                     #ser.open()
                     return line,line2,triggermarker,freqtext
+                #ser.reset_input_buffer()
                 if running:
                     if( 1 == numchannels ):
                         plt.setp(line2, linestyle='None')
