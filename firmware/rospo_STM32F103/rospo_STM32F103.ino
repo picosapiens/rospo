@@ -17,6 +17,7 @@ uint8_t serialbuffer[SERIALBUFFERSIZE];
 #define NOTRIGGER 0
 #define RISINGTRIGGER 1
 #define FALLINGTRIGGER 2
+#define TRIGGERMODES 3
 uint8_t triggertype = NOTRIGGER;
 uint16_t triggerlevel = 128;
 #define TRIGGERTIMEOUT 1000
@@ -40,7 +41,8 @@ uint16_t triggerindex;
 
 // This function runs each ADC at approximately 900 kS/s (so 1.80 MS/s if interleaved on the same channel).
 // This is about as fast as we seem to be able to run with the main CPU actively handling the data. The
-// advantage of this is that we can save the behavior of the signal before trigger to give some context.
+// advantage of this is that we can save the behavior of the signal before trigger (at the same sample rate
+// as the data after trigger) to give some context.
 
 void capture_slow()
 {
@@ -276,9 +278,11 @@ void capture_fast()
       case 3: // armed
         if(currentstate == lookfor)
         {
-          trigger--;
           buffercycles = TRIGGERTIMEOUT; // Doing this to exit the loop immediately
         }
+        break;
+      case 1: // only gets here if in NOTRIGGER mode
+        buffercycles = TRIGGERTIMEOUT; // Doing this to exit the loop immediately
         break;
     }
     
@@ -330,6 +334,7 @@ void setup() {
   adc_calibrate(ADC1);
   adc_calibrate(ADC2);
   //delay(3000);
+  Serial.print("\n");
 }
 
 
@@ -345,6 +350,7 @@ void loop() {
   Serial.print('A');
   Serial.print('T');
   Serial.print('A');
+  delayMicroseconds(100);
   if(bothchannels)
   {
     Serial.write(0x02); // two channels
@@ -354,45 +360,48 @@ void loop() {
   Serial.write(uint8_t(0x00)); // simultaneous
   Serial.write(uint8_t( (ADCBUFFERSIZE) & 255));
   Serial.write(uint8_t((ADCBUFFERSIZE) >> 8) & 255 );
+  delayMicroseconds(100);
   Serial.write( nspersample & 255 );
   Serial.write( (nspersample >> 8) & 255 );
-  int adjustedtriggerindex = triggerindex - ADCCounter;
-  if(0>adjustedtriggerindex)
-    adjustedtriggerindex += ADCBUFFERSIZE;
+  uint16_t adjustedtriggerindex = (triggerindex + ADCBUFFERSIZE - ADCCounter ) & (ADCBUFFERSIZE-1);
   Serial.write( adjustedtriggerindex & 255 );
   Serial.write( (adjustedtriggerindex >> 8) & 255 );
   
   for(int i=0;i<ADCBUFFERSIZE;i++)
   {
     Serial.write((uint8_t)((ADCBuffer[(ADCCounter + i) & (ADCBUFFERSIZE-1)]) >> 4));
-    delayMicroseconds(10); // I lose bytes if I try to send too quickly
+    delayMicroseconds(20); // I lose bytes if I try to send too quickly
     //Serial.print(',');
   }
   //Serial.println("END");
   Serial.print('E');
   Serial.print('N');
   Serial.print('D');
-  Serial.print('\n');
-  delay(100);
+  //Serial.print('\n');
+  delayMicroseconds(100);
 
   int keepwaiting = 0;
+  memset( (void *)serialbuffer, 0, sizeof(serialbuffer) ); // clear buffer
 
-  if( serialbuffer[SERIALMSGSIZE-1] == 'X' ) // Check for end character to make sure message didn't get garbled
-    while(keepwaiting < 10000)
+  while(keepwaiting < 10000)
+  {
+    int incomingByte = 0; // for incoming serial data
+    incomingByte = Serial.read();
+    int i = 0;
+    int counter = 0;
+    while(0 <= incomingByte)
     {
-      int incomingByte = 0; // for incoming serial data
+      serialbuffer[i] = incomingByte;
+      i += 1;
+      if (i==SERIALMSGSIZE)
+        break;
       incomingByte = Serial.read();
-      int i = 0;
-      while(0 <= incomingByte)
-      {
-        serialbuffer[i] = incomingByte;
-        i += 1;
-        if (i==SERIALMSGSIZE)
-          break;
-        incomingByte = Serial.read();
-      }
-      //delay(100); // Give everything a chance to catch up
-      // Parse command
+      if( counter++ > 1000 )
+        return;
+    }
+    //delay(100); // Give everything a chance to catch up
+    // Parse command
+    if( (SERIALMSGSIZE==i) && (serialbuffer[SERIALMSGSIZE-1] == 'X') ) // Check for end character to make sure message didn't get garbled
       switch(serialbuffer[0])
       {
         case 'C':
@@ -407,7 +416,7 @@ void loop() {
           switch(serialbuffer[1])
           {
             case 'N': // RN -- run scope
-              keepwaiting = 100000;
+              keepwaiting = 100000; // to break the loop
               break;
           }
           break;
@@ -415,12 +424,10 @@ void loop() {
           switch(serialbuffer[1])
           {
             case 'R': // TR -- trigger settings
-              //if( '\n' == serialbuffer[8] )
-              //{
-                triggertype = serialbuffer[2];
-                triggerlevel = (serialbuffer[3]) << 4; // Bit shifting because GUI only uses 8-bit values
-                //delay(1000);
-              //}
+              triggertype = serialbuffer[2];
+              if(triggertype >= TRIGGERMODES)
+                triggertype = NOTRIGGER;
+              triggerlevel = (uint16_t)(serialbuffer[3]) << 4; // Bit shifting because GUI only uses 8-bit values
               break;
           }
           break;
@@ -428,7 +435,7 @@ void loop() {
           switch(serialbuffer[1])
           {
             case 'T': // ST -- settings
-              applyoffsets = serialbuffer[2];
+              applyoffsets = (0!=serialbuffer[2]);
               if( serialbuffer[3])
               {
                 bothchannels = true;
@@ -447,8 +454,8 @@ void loop() {
           }
           break;
       }
-      delay(10);
-      keepwaiting++;
-    }
+    delayMicroseconds(10);
+    keepwaiting++;
+  }
 
 }

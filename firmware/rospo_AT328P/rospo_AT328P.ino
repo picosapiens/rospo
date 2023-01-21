@@ -183,6 +183,7 @@ void loop() {
   delayMicroseconds(100);
 
   int keepwaiting = 0;
+  memset( (void *)serialbuffer, 0, sizeof(serialbuffer) ); // clear buffer
   while(keepwaiting < 1000)
   {
     int incomingByte = 0; // for incoming serial data

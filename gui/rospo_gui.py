@@ -38,14 +38,14 @@ running = True
 ser = serial.Serial()
 ser.port = serport
 ser.baudrate = 115200
-#ser.bytesize = serial.EIGHTBITS #number of bits per bytes
-#ser.parity = serial.PARITY_NONE #set parity check: no parity
-#ser.stopbits = serial.STOPBITS_ONE #number of stop bits
+ser.bytesize = serial.EIGHTBITS #number of bits per bytes
+ser.parity = serial.PARITY_NONE #set parity check: no parity
+ser.stopbits = serial.STOPBITS_ONE #number of stop bits
 ser.timeout = 1.0          #block read
-#ser.xonxoff = False     #disable software flow control
+ser.xonxoff = False     #disable software flow control
 ser.rtscts = False     #disable hardware (RTS/CTS) flow control
 ser.dsrdtr = False       #disable hardware (DSR/DTR) flow control
-ser.writeTimeout = 2     #timeout for write
+ser.writeTimeout = 3     #timeout for write
 ser.open()
 
 
@@ -216,6 +216,7 @@ if ser.isOpen():
                 print(outmsg)
                 outmsg = bytearray([0,0,0,0,0,0,0,0,0])
             time.sleep(0.002)
+            #ser.reset_input_buffer()
             runmsg = bytearray([ord('R'),ord('N'),0,0,0,0,0,0,ord('X')])
             ser.write(runmsg)
             #ser.reset_output_buffer() #flushOutput()
@@ -259,13 +260,16 @@ if ser.isOpen():
                 incomingbytes = ser.read(lendata)
                 if lendata != len(incomingbytes):
                     print("Did not get a full frame: ",len(incomingbytes)," vs ",lendata)
-                    print(incomingbytes)
-                    print(ser.read(3))
+                    #print(incomingbytes)
+                    #print(ser.read(3))
                     return line,line2,triggermarker,freqtext 
                 #else:
                 #    print("Full frame received")
-                if(b"END" != ser.read(3) ):
+                endbytes = ser.read(3)
+                if(b"END" != endbytes ):
                     print("Did not get an END marker where expected (Bytes may have been lost)")
+                    #print(incomingbytes)
+                    #print(endbytes)
                     #ser.close()
                     #ser.open()
                     return line,line2,triggermarker,freqtext
